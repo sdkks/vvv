@@ -73,6 +73,8 @@ it('returns 202/409, reports durable progress, cancels cooperatively and resumes
     expect((await current()).json()).toMatchObject({
       id: 1,
       status: 'running',
+      started_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+      finished_at: null,
       discovered: 8,
       processed: 0,
       errors: 0,
@@ -92,6 +94,8 @@ it('returns 202/409, reports durable progress, cancels cooperatively and resumes
     expect((await current()).json()).toEqual({
       id: 2,
       status: 'done',
+      started_at: expect.any(String),
+      finished_at: expect.any(String),
       discovered: 8,
       processed: 8,
       errors: 0,
@@ -119,6 +123,8 @@ it('recovers running scans before accepting requests', async () => {
   expect((await current()).json()).toEqual({
     id: 1,
     status: 'interrupted',
+    started_at: expect.any(String),
+    finished_at: expect.any(String),
     discovered: 0,
     processed: 0,
     errors: 0,

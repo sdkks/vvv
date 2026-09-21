@@ -17,6 +17,8 @@ export type ScanStatus = 'running' | 'interrupted' | 'done' | 'cancelled';
 export interface ScanProgress {
   id: number;
   status: ScanStatus;
+  started_at: string;
+  finished_at?: string | null;
   discovered: number;
   processed: number;
   errors: number;

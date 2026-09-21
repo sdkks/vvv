@@ -87,3 +87,41 @@ a {
 [aria-pressed='true'] {
   background: #7f2828;
 }
+.scan-list {
+  list-style: none;
+  padding: 0;
+}
+.scan-list li {
+  margin-block: 1rem;
+}
+.scan-list fieldset {
+  min-width: 0;
+}
+.scan-list legend {
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.scan-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block: 0.5rem;
+}
+.scan-option input {
+  flex-shrink: 0;
+  width: 1.5rem;
+}
+#directory-path {
+  width: 100%;
+  min-width: 0;
+}
+summary {
+  cursor: pointer;
+  padding-block: 0.75rem;
+}
+@media (max-width: 600px) {
+  main {
+    margin: 0;
+    padding: 1rem;
+  }
+}

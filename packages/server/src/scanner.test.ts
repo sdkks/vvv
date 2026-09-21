@@ -109,6 +109,8 @@ it('discovers allowlisted images/videos in multiple roots, streams SHA-256, and 
   expect(scanner.current()).toEqual({
     id: 1,
     status: 'done',
+    started_at: expect.any(String),
+    finished_at: expect.any(String),
     discovered: allowed.length + 1,
     processed: allowed.length + 1,
     errors: 0,
@@ -359,6 +361,8 @@ it('bounds hashing to four workers and cancels between files, preserving pending
   expect(scanner.current()).toEqual({
     id,
     status: 'cancelled',
+    started_at: expect.any(String),
+    finished_at: expect.any(String),
     discovered: 9,
     processed: 4,
     errors: 0,

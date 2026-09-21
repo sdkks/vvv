@@ -270,6 +270,8 @@ it('streams real scanner snapshots, cancellation and reconnect resync, and close
       expect(live.snapshots()).toContainEqual({
         id: 1,
         status: 'running',
+        started_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+        finished_at: null,
         discovered: 8,
         processed: 0,
         errors: 0,
@@ -287,6 +289,8 @@ it('streams real scanner snapshots, cancellation and reconnect resync, and close
     expect(live.snapshots().at(-1)).toEqual({
       id: 1,
       status: 'cancelled',
+      started_at: expect.any(String),
+      finished_at: expect.any(String),
       discovered: 8,
       processed: 4,
       errors: 0,
@@ -296,6 +300,15 @@ it('streams real scanner snapshots, cancellation and reconnect resync, and close
   const reconnected = await stream(address, 1, 'old-event-id');
   await vi.waitFor(() => expect(reconnected.snapshots()).toHaveLength(1));
   expect(reconnected.snapshots()[0]).toEqual((await current()).json());
+  const saved = db.prepare('SELECT started_at,finished_at FROM scans WHERE id=1').get() as Pick<
+    ScanProgress,
+    'started_at' | 'finished_at'
+  >;
+  expect(reconnected.snapshots()[0]).toMatchObject(saved);
+  db.exec("INSERT INTO scans(status) VALUES ('done')");
+  const older = await stream(address, 1);
+  await vi.waitFor(() => expect(older.snapshots()).toHaveLength(1));
+  expect(older.snapshots()[0]).toEqual(reconnected.snapshots()[0]);
   await app.close();
   await vi.waitFor(() => expect(reconnected.response.destroyed).toBe(true));
 });

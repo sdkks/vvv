@@ -91,7 +91,9 @@ export function scanRoutes(
         current?.id === id
           ? current
           : (db
-              .prepare('SELECT id,status,discovered,processed,errors FROM scans WHERE id=?')
+              .prepare(
+                'SELECT id,status,discovered,processed,errors,started_at,finished_at FROM scans WHERE id=?'
+              )
               .get(id) as ScanProgress | undefined);
       if (!snapshot) return reply.code(404).send({ error: 'scan_not_found' });
       reply.hijack();

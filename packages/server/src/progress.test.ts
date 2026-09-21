@@ -8,6 +8,7 @@ let progress: Progress;
 const snapshot = (processed = 0, id = 1): ScanProgress => ({
   id,
   status: 'running',
+  started_at: '2026-09-21 12:00:00',
   discovered: 1000,
   processed,
   errors: 0,

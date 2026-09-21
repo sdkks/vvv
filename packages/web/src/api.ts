@@ -1,4 +1,16 @@
-import type { GroupKind, GroupResponse, GroupsResponse, StartMatchResponse } from '@vvv/shared';
+import type {
+  GroupKind,
+  GroupResponse,
+  GroupsResponse,
+  StartMatchResponse,
+  ScanDirsResponse,
+  CreateScanDirRequest,
+  ScanDir,
+  UpdateScanDirRequest,
+  CurrentScanResponse,
+  StartScanResponse,
+  ScanErrorsResponse,
+} from '@vvv/shared';
 
 export class ResultsChangedError extends Error {
   constructor() {
@@ -37,10 +49,16 @@ async function request(path: string, init?: RequestInit) {
       (response.status === 404 && code === 'group_not_found')
     )
       throw new ResultsChangedError();
+    const messages: Record<string, string> = {
+      match_running: 'Matching is already running. Try again shortly.',
+      scan_running: 'A scan is already running. Refresh to see its progress.',
+      directory_registered: 'This directory is already registered.',
+      invalid_directory: 'Directory not found or not accessible on the server.',
+      not_a_directory: 'This path is not a directory.',
+    };
     throw new Error(
-      code === 'match_running'
-        ? 'Matching is already running. Try again shortly.'
-        : 'Request failed. Check the server and try again.'
+      (typeof code === 'string' && messages[code]) ||
+        'Request failed. Check the server and try again.'
     );
   }
   return response;
@@ -65,3 +83,25 @@ export const getGroups = (kind: KindFilter, cursor = '', signal?: AbortSignal) =
 export const getGroup = (id: string, cursor = '', signal?: AbortSignal) =>
   api<GroupResponse>(`/groups/${encodeURIComponent(id)}${groupsSearch('', cursor)}`, { signal });
 export const runMatching = () => api<StartMatchResponse>('/matches/run', { method: 'POST' });
+
+const jsonBody = (method: string, body: object): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+export const getScanDirs = (signal?: AbortSignal) =>
+  api<ScanDirsResponse>('/scan-dirs', { signal });
+export const addScanDir = (body: CreateScanDirRequest) =>
+  api<ScanDir>('/scan-dirs', jsonBody('POST', body));
+export const updateScanDir = (id: number, body: UpdateScanDirRequest) =>
+  api<ScanDir>(`/scan-dirs/${id}`, jsonBody('PATCH', body));
+export const removeScanDir = (id: number) => api(`/scan-dirs/${id}`, { method: 'DELETE' });
+export const getCurrentScan = (signal?: AbortSignal) =>
+  api<CurrentScanResponse>('/scans/current', { signal });
+export const startScan = () => api<StartScanResponse>('/scans', { method: 'POST' });
+export const cancelScan = (id: number) =>
+  request(`/scans/${id}/cancel`, { method: 'POST' }).then(() => undefined);
+export const getScanErrors = (id: number, cursor: string, signal?: AbortSignal) =>
+  api<ScanErrorsResponse>(`/scans/${id}/errors?${new URLSearchParams({ cursor, limit: '50' })}`, {
+    signal,
+  });

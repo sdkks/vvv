@@ -54,7 +54,9 @@ export class Scanner {
   }
   current(): ScanProgress | null {
     const row = this.db
-      .prepare('SELECT id,status,discovered,processed,errors FROM scans ORDER BY id DESC LIMIT 1')
+      .prepare(
+        'SELECT id,status,discovered,processed,errors,started_at,finished_at FROM scans ORDER BY id DESC LIMIT 1'
+      )
       .get() as ScanProgress | undefined;
     return row ? { ...row, ...(this.currentFile ? { current_file: this.currentFile } : {}) } : null;
   }
