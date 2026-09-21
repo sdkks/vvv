@@ -3,19 +3,21 @@
   "version": "0.0.0-development",
   "description": "Veni Vidi Video — content-aware duplicate video/image finder",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.2",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.22.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint .",
+    "dev": "pnpm -r --parallel --filter @vvv/server --filter @vvv/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint *.js && pnpm -r lint",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "pnpm -r test",
     "test:watch": "vitest",
     "release": "semantic-release",
     "release:dry": "semantic-release --dry-run",
@@ -24,6 +26,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "better-sqlite3"
     ]
   },
   "devDependencies": {

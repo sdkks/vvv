@@ -1,0 +1,25 @@
+{
+  "name": "@vvv/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.0",
+    "@vvv/shared": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.0.0",
+    "fastify-plugin": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "tsx": "^4.0.0"
+  }
+}

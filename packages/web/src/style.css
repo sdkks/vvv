@@ -1,0 +1,50 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #182230;
+  background: #f3f5f7;
+  line-height: 1.5;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 42rem;
+  margin: 3rem auto;
+  padding: 2rem;
+  background: white;
+  border-radius: 0.5rem;
+}
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+input,
+button {
+  font: inherit;
+  padding: 0.65rem;
+  min-height: 2.75rem;
+  border: 1px solid #566273;
+  border-radius: 0.25rem;
+}
+button {
+  color: white;
+  background: #194b88;
+  cursor: pointer;
+}
+button:disabled {
+  background: #566273;
+  cursor: wait;
+}
+:focus-visible {
+  outline: 3px solid #a33e00;
+  outline-offset: 3px;
+}
+[role='alert'] {
+  color: #a21b1b;
+}
+p {
+  overflow-wrap: anywhere;
+}
