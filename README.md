@@ -2,6 +2,8 @@
 
 VVV is a content aware video matching tool to find and nuke your duplicate videos to save disk space.
 
+Containers are built and run with **podman** (not docker) — see `docs/deployment.md` and `AGENTS.md`.
+
 # Roadmap
 
 - Support Videos
