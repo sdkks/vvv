@@ -27,3 +27,6 @@ playwright-report
 
 # Local tooling state
 .tags
+
+# Test media fixtures (users supply their own originals; generated variants derive from them)
+tests/fixtures/data/

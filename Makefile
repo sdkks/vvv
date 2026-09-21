@@ -37,6 +37,10 @@ build:
 image:
 	podman build --format docker -t localhost/vvv:latest .
 
+# Build synthetic media test fixtures (derived from your own local originals)
+fixtures:
+	bash tests/fixtures/generate.sh
+
 # Scan the full git history for leaked secrets
 secrets:
 	gitleaks detect --verbose
