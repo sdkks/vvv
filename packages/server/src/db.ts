@@ -1,7 +1,11 @@
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
+import { scansMigration } from './migrations/001-scans.js';
 
-const migrations = ['CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'];
+const migrations = [
+  'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  scansMigration,
+];
 export function openDatabase(dataDir: string) {
   const path = join(dataDir, 'vvv.db');
   const db = new Database(path);
