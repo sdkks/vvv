@@ -59,3 +59,44 @@ export interface ScanErrorsResponse {
   items: ScanError[];
   next_cursor: string | null;
 }
+export type GroupKind = 'exact' | 'image' | 'video';
+export interface StartMatchResponse {
+  match_run: number;
+}
+export interface StaleCursorResponse {
+  error: 'stale_cursor';
+  match_run: number | null;
+}
+export interface Page<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+export interface DuplicateGroup {
+  id: number;
+  kind: GroupKind;
+  member_count: number;
+  total_bytes: number;
+  reclaimable_bytes: number;
+}
+export interface GroupMember {
+  file_id: number;
+  path: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  similarity: number | null;
+  quarantined: false;
+}
+export type GroupsResponse = Page<DuplicateGroup>;
+export interface GroupResponse extends DuplicateGroup {
+  members: Page<GroupMember>;
+}
+export interface ExportGroup {
+  id: number;
+  kind: GroupKind;
+  members: Omit<GroupMember, 'quarantined'>[];
+}
+export interface ExportResponse {
+  groups: ExportGroup[];
+}

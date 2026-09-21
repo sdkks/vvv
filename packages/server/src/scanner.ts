@@ -42,7 +42,8 @@ export class Scanner {
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
-    private onProgress?: (snapshot: ScanProgress) => void
+    private onProgress?: (snapshot: ScanProgress) => void,
+    private onDone?: () => void
   ) {
     db.transaction(() => {
       db.exec(
@@ -257,5 +258,6 @@ export class Scanner {
       .run(status, id);
     this.publish();
     this.log.info({ scan_id: id, status }, 'Scan finished');
+    if (status === 'done') this.onDone?.();
   }
 }

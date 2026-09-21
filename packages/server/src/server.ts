@@ -8,18 +8,28 @@ import { scanRoutes } from './routes/scans.js';
 import { scanDirRoutes } from './routes/scan-dirs.js';
 import { Progress } from './progress.js';
 import { serveWeb } from './web.js';
+import { Matcher } from './matcher.js';
+import { groupRoutes } from './routes/groups.js';
+import { exportRoutes } from './routes/export.js';
 
 export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
     logger,
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
-  const { db } = openDatabase(config.dataDir);
+  const { db, openReadOnly } = openDatabase(config.dataDir);
   const progress = new Progress();
-  const scanner = new Scanner(db, app.log, (snapshot) => progress.publish(snapshot));
+  const matcher = new Matcher(db, app.log);
+  const scanner = new Scanner(
+    db,
+    app.log,
+    (snapshot) => progress.publish(snapshot),
+    () => matcher.afterScan()
+  );
   app.addHook('preClose', async () => {
     progress.close();
     await scanner.close();
+    await matcher.close();
   });
   app.addHook('onClose', async () => {
     db.close();
@@ -27,6 +37,8 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   await app.register(auth, { config });
   scanRoutes(app, db, scanner, progress);
   scanDirRoutes(app, db);
+  groupRoutes(app, db, matcher);
+  exportRoutes(app, openReadOnly);
   app.get('/api/health', async (): Promise<HealthResponse> => {
     db.prepare('SELECT 1').get();
     return { status: 'ok', db: 'ok' };
