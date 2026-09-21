@@ -17,7 +17,8 @@
     "@vvv/shared": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.0.0",
-    "fastify-plugin": "^5.1.0"
+    "fastify-plugin": "^5.1.0",
+    "sharp": "~0.35.4"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

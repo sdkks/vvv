@@ -10,6 +10,14 @@ RUN pnpm install --frozen-lockfile
 COPY tsconfig.json ./
 COPY packages ./packages
 RUN pnpm build && pnpm --filter @vvv/server deploy --legacy --prod --offline /runtime
+# Legacy deploy omits sharp's platform optional packages; preserve the installed native closure.
+RUN for package in /app/node_modules/.pnpm/@img+sharp-*; do \
+      cp -a "$package" /runtime/node_modules/.pnpm/; \
+    done; \
+    for sharp in /runtime/node_modules/.pnpm/sharp@*/node_modules; do \
+      cp -a /app/node_modules/.pnpm/sharp@*/node_modules/@img "$sharp/"; \
+    done; \
+    cd /runtime && node -e "require('sharp')"
 
 FROM docker.io/library/node:22-trixie-slim@sha256:c5849ff9c9ebcd66615412f0b548ca5b8ecaef84003dc9ac2e077ebe46aaa3f6 AS media
 ARG FFMPEG_TAG=autobuild-2026-08-31-13-27
