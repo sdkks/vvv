@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Route, Routes, useLocation, useNavigate } from 'react-router';
+import { NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, SessionResponse } from '@vvv/shared';
 import { api, returnLocation } from './api';
+import { Groups } from './Groups';
 
 function Login() {
   const [error, setError] = useState('');
@@ -61,7 +62,7 @@ function Login() {
   );
 }
 
-function Home() {
+function Shell() {
   const session = useQuery({
     queryKey: ['session'],
     queryFn: () => api<SessionResponse>('/auth/session'),
@@ -84,6 +85,18 @@ function Home() {
   return (
     <>
       <header>VVV — Veni Vidi Video</header>
+      <nav className="toolbar" aria-label="Main navigation">
+        <NavLink to="/">Home</NavLink>
+        <NavLink to="/groups">Groups</NavLink>
+      </nav>
+      <Outlet />
+    </>
+  );
+}
+
+function Home() {
+  return (
+    <>
       <h1>Home</h1>
       <p>No scan directories yet.</p>
       <p>Directory setup and scanning are coming next.</p>
@@ -101,7 +114,10 @@ export function App() {
     <main ref={main} tabIndex={-1}>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="*" element={<Home />} />
+        <Route element={<Shell />}>
+          <Route path="/groups/:id?" element={<Groups />} />
+          <Route path="*" element={<Home />} />
+        </Route>
       </Routes>
     </main>
   );

@@ -11,7 +11,7 @@ body {
   margin: 0;
 }
 main {
-  max-width: 42rem;
+  max-width: 56rem;
   margin: 3rem auto;
   padding: 2rem;
   background: white;
@@ -22,6 +22,7 @@ form {
   gap: 0.75rem;
 }
 input,
+select,
 button {
   font: inherit;
   padding: 0.65rem;
@@ -36,9 +37,10 @@ button {
 }
 button:disabled {
   background: #566273;
-  cursor: wait;
+  cursor: not-allowed;
 }
-:focus-visible {
+:focus-visible,
+.member-card:focus-within {
   outline: 3px solid #a33e00;
   outline-offset: 3px;
 }
@@ -47,4 +49,41 @@ button:disabled {
 }
 p {
   overflow-wrap: anywhere;
+}
+a {
+  color: #194b88;
+}
+.toolbar,
+.member-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+.groups-list,
+.members {
+  list-style: none;
+  padding: 0;
+}
+.groups-list a {
+  display: block;
+  padding-block: 1rem;
+  border-bottom: 1px solid #566273;
+}
+.thumbnail {
+  width: 10rem;
+  height: 8rem;
+  object-fit: contain;
+  background: #e7edf5;
+}
+.fallback {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+.video {
+  background: #fff0ce;
+}
+[aria-pressed='true'] {
+  background: #7f2828;
 }
