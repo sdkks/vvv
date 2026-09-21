@@ -9,6 +9,7 @@ import type {
   UpdateScanDirRequest,
 } from '@vvv/shared';
 import { idParams } from './scans.js';
+import { deleteScanDir } from '../matcher.js';
 
 const options = { follow_symlinks: { type: 'boolean' }, cross_filesystems: { type: 'boolean' } };
 type DirectoryRow = Omit<ScanDir, 'follow_symlinks' | 'cross_filesystems'> & {
@@ -97,7 +98,7 @@ export function scanDirRoutes(app: FastifyInstance, db: Database.Database) {
     '/api/scan-dirs/:id',
     { schema: { params: idParams } },
     async (request, reply) => {
-      if (!db.prepare('DELETE FROM scan_dirs WHERE id=?').run(request.params.id).changes)
+      if (!deleteScanDir(db, Number(request.params.id)))
         return reply.code(404).send({ error: 'directory_not_found' });
       return reply.code(204).send();
     }

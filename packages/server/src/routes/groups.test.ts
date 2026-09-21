@@ -38,14 +38,16 @@ afterEach(async () => {
 });
 const get = (url: string) => app.inject({ url, headers: { cookie } });
 const start = () => app.inject({ method: 'POST', url: '/api/matches/run', headers: { cookie } });
-function put(path: string, size = 10, hash = 'same') {
+const removeDir = (id = 1) =>
+  app.inject({ method: 'DELETE', url: `/api/scan-dirs/${id}`, headers: { cookie } });
+function put(path: string, size = 10, hash = 'same', scanDirId = 1) {
   return Number(
     db
       .prepare(
         `INSERT INTO files(scan_dir_id,rel_path,kind,size,mtime_ns,status,sha256,width,height,duration_ms)
-    VALUES (1,?,'image',?,0,'done',?,320,240,NULL)`
+    VALUES (?,?,'image',?,0,'done',?,320,240,NULL)`
       )
-      .run(path, size, hash).lastInsertRowid
+      .run(scanDirId, path, size, hash).lastInsertRowid
   );
 }
 async function match() {
@@ -249,6 +251,171 @@ it('caps group listings and returns 409 for an in-flight match without exposing 
   expect(two.json()).toEqual({ error: 'match_running' });
   const cursor = browsing.json<GroupsResponse>().next_cursor!;
   expect(JSON.parse(Buffer.from(cursor, 'base64url').toString())[0]).toBe(old);
+});
+
+it('removes phantom groups and member rows when their only directory is deleted', async () => {
+  put('one.jpg');
+  put('two.jpg');
+  await match();
+  const group = (await pages())[0]!;
+  expect((await removeDir()).statusCode).toBe(204);
+  expect(await pages()).toEqual([]);
+  expect((await get(`/api/groups/${group.id}`)).statusCode).toBe(404);
+  expect((await get('/api/export.json')).json()).toEqual({ groups: [] });
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 0 });
+});
+
+it.each([1, 2, 3])('recomputes a spanning group with %i surviving members', async (survivors) => {
+  db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(join(root, 'other'));
+  put('removed.jpg');
+  const ids = Array.from({ length: survivors }, (_, i) => put(`keep-${i}.jpg`, 10, 'same', 2));
+  await match();
+  const group = (await pages())[0]!;
+  expect(group.member_count).toBe(survivors + 1);
+  expect((await removeDir()).statusCode).toBe(204);
+  const detail = await get(`/api/groups/${group.id}`);
+  if (survivors < 2) {
+    expect(await pages()).toEqual([]);
+    expect(detail.statusCode).toBe(404);
+  } else {
+    expect(await pages()).toEqual([
+      {
+        ...group,
+        member_count: survivors,
+        total_bytes: survivors * 10,
+        reclaimable_bytes: (survivors - 1) * 10,
+      },
+    ]);
+    expect(detail.json<GroupResponse>().members.items.map((member) => member.file_id)).toEqual(ids);
+    expect(detail.json<GroupResponse>()).toMatchObject((await pages())[0]!);
+  }
+});
+
+it('prunes non-done survivors and subtracts the largest surviving size from totals', async () => {
+  db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(join(root, 'other'));
+  put('removed.jpg');
+  const small = put('small.jpg', 10, 'same', 2);
+  const large = put('large.jpg', 10, 'same', 2);
+  const missing = put('missing.jpg', 10, 'same', 2);
+  const untouched = [
+    put('unrelated-a.jpg', 30, 'other', 2),
+    put('unrelated-b.jpg', 30, 'other', 2),
+  ];
+  await match();
+  const before = await pages();
+  const group = before.find((item) => item.member_count === 4)!;
+  db.prepare("UPDATE files SET status='missing' WHERE id=?").run(missing);
+  db.prepare('UPDATE files SET size=25 WHERE id=?').run(large);
+  expect((await removeDir()).statusCode).toBe(204);
+  expect((await get(`/api/groups/${group.id}`)).json<GroupResponse>()).toMatchObject({
+    ...group,
+    member_count: 2,
+    total_bytes: 35,
+    reclaimable_bytes: 10,
+    members: { items: [{ file_id: small }, { file_id: large }], next_cursor: null },
+  });
+  expect(
+    db
+      .prepare('SELECT file_id FROM dup_group_members WHERE group_id=? ORDER BY file_id')
+      .all(group.id)
+  ).toEqual([{ file_id: small }, { file_id: large }]);
+  expect((await pages()).find((item) => item.id !== group.id)).toEqual(
+    before.find((item) => item.id !== group.id)
+  );
+  expect(
+    db
+      .prepare('SELECT file_id FROM dup_group_members WHERE group_id<>? ORDER BY file_id')
+      .all(group.id)
+  ).toEqual(untouched.map((file_id) => ({ file_id })));
+});
+
+it('repairs more than one affected-group batch and rolls back if directory deletion fails', async () => {
+  db.transaction(() => {
+    for (let i = 0; i < 1001; i++) {
+      put(`${i}-a.jpg`, 10, `${i}`);
+      put(`${i}-b.jpg`, 10, `${i}`);
+    }
+  })();
+  await match();
+  db.exec(`CREATE TRIGGER fail_delete BEFORE DELETE ON scan_dirs BEGIN
+    SELECT RAISE(ABORT, 'delete fault'); END`);
+  expect((await removeDir()).statusCode).toBe(500);
+  expect(db.prepare('SELECT count(*) AS n FROM dup_groups WHERE member_count=2').get()).toEqual({
+    n: 1001,
+  });
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 2002 });
+  expect(db.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 2002 });
+  db.exec('DROP TRIGGER fail_delete');
+  expect((await removeDir()).statusCode).toBe(204);
+  expect(await pages()).toEqual([]);
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 0 });
+});
+
+it('corrects active results and building groups before, during and after a member chunk', async () => {
+  db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(join(root, 'other'));
+  db.transaction(() => {
+    // This group is completed before the first member-chunk yield.
+    put('early-remove.jpg', 1, 'early');
+    put('early-keep.jpg', 1, 'early', 2);
+    // This group is only partially populated when the directory is removed.
+    for (let i = 0; i < 10001; i++) put(`large-${i}.jpg`, 10, 'large');
+    put('large-keep-a.jpg', 10, 'large', 2);
+    put('large-keep-b.jpg', 10, 'large', 2);
+    // These candidates are snapshotted but have not started publication at deletion time.
+    put('later-a.jpg', 20, 'later');
+    put('later-b.jpg', 20, 'later');
+    put('spanning-remove.jpg', 30, 'spanning');
+    put('spanning-keep-a.jpg', 30, 'spanning', 2);
+    put('spanning-keep-b.jpg', 30, 'spanning', 2);
+  })();
+  const old = await match();
+  const original = await pages();
+  const response = await start();
+  expect(response.statusCode).toBe(202);
+  const building = response.json<{ match_run: number }>().match_run;
+  await tick();
+  expect(activeMatchRun(db)).toBe(old);
+  expect(
+    db.prepare('SELECT count(*) AS n FROM dup_groups WHERE match_run=?').get(building)
+  ).toEqual({ n: 2 });
+  expect(
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM dup_group_members m JOIN dup_groups g ON g.id=m.group_id
+    WHERE g.match_run=?`
+      )
+      .get(building)
+  ).toEqual({ n: 10000 });
+  expect((await removeDir()).statusCode).toBe(204);
+  expect(activeMatchRun(db)).toBe(old);
+  const corrected = await pages();
+  expect(
+    corrected.map(({ member_count, total_bytes, reclaimable_bytes }) => ({
+      member_count,
+      total_bytes,
+      reclaimable_bytes,
+    }))
+  ).toEqual([
+    { member_count: 2, total_bytes: 60, reclaimable_bytes: 30 },
+    { member_count: 2, total_bytes: 20, reclaimable_bytes: 10 },
+  ]);
+  for (const group of original.filter((item) => !corrected.some(({ id }) => id === item.id)))
+    expect((await get(`/api/groups/${group.id}`)).statusCode).toBe(404);
+  await vi.waitFor(() => {
+    expect(activeMatchRun(db)).toBe(building);
+    expect(db.prepare('SELECT count(*) AS n FROM match_runs').get()).toEqual({ n: 1 });
+  });
+  const clean = (items: DuplicateGroup[]) =>
+    items.map(({ member_count, total_bytes, reclaimable_bytes }) => ({
+      member_count,
+      total_bytes,
+      reclaimable_bytes,
+    }));
+  expect(clean(await pages())).toEqual(clean(corrected));
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 4 });
+  await tick();
+  await match();
+  expect(clean(await pages())).toEqual(clean(corrected));
 });
 
 it('automatically matches a completed real scan without a manual match request', async () => {

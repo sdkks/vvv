@@ -2,7 +2,42 @@ import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 
-type Candidate = { size: number; sha256: string; count: number };
+type Candidate = { size: number; sha256: string };
+function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
+  db.prepare(
+    `DELETE FROM dup_group_members AS m WHERE group_id=? AND EXISTS (
+    SELECT 1 FROM files f WHERE f.id=m.file_id AND (f.scan_dir_id=? OR f.status<>'done'))`
+  ).run(id, scanDirId);
+  db.prepare(
+    `UPDATE dup_groups SET (member_count,total_bytes,reclaimable_bytes)=(
+    SELECT count(*),coalesce(sum(f.size),0),coalesce(sum(f.size)-max(f.size),0)
+    FROM dup_group_members m JOIN files f ON f.id=m.file_id WHERE m.group_id=?) WHERE id=?`
+  ).run(id, id);
+}
+export function deleteScanDir(db: Database.Database, scanDirId: number): number {
+  return db.transaction(() => {
+    const active = activeMatchRun(db);
+    const affected = db.prepare(`SELECT g.id FROM dup_groups g WHERE g.id>?
+      AND (g.match_run=? OR g.match_run IN (SELECT id FROM match_runs WHERE status='building'))
+      AND EXISTS (SELECT 1 FROM dup_group_members m JOIN files f ON f.id=m.file_id
+        WHERE m.group_id=g.id AND f.scan_dir_id=?) ORDER BY g.id LIMIT 1000`);
+    let after = 0;
+    for (;;) {
+      const batch = affected.all(after, active, scanDirId) as { id: number }[];
+      if (!batch.length) break;
+      for (const { id } of batch) {
+        refreshGroup(db, id, scanDirId);
+        // A building group may still be receiving member chunks; keep its id until activation.
+        db.prepare('DELETE FROM dup_groups WHERE id=? AND member_count<2 AND match_run=?').run(
+          id,
+          active
+        );
+        after = id;
+      }
+    }
+    return db.prepare('DELETE FROM scan_dirs WHERE id=?').run(scanDirId).changes;
+  })();
+}
 export function activeMatchRun(db: Database.Database): number | null {
   const row = db.prepare("SELECT value FROM settings WHERE key='active_match_run'").get() as
     { value: string } | undefined;
@@ -50,13 +85,12 @@ export class Matcher {
     await yieldLoop();
     const db = this.db;
     this.log.info({ match_run: id }, 'Matching started');
-    const candidates =
-      db.prepare(`SELECT size,sha256,count(*) AS count FROM files INDEXED BY idx_files_exact
+    const candidates = db.prepare(`SELECT size,sha256 FROM files INDEXED BY idx_files_exact
       WHERE status='done' AND sha256 IS NOT NULL AND (size,sha256)>(?,?)
       GROUP BY size,sha256 HAVING count(*)>1 ORDER BY size,sha256 LIMIT 1000`);
     const group =
       db.prepare(`INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run)
-      VALUES ('exact',?,?,?,?)`);
+      VALUES ('exact',0,0,0,?)`);
     const members = db.prepare(`INSERT INTO dup_group_members(group_id,file_id)
       SELECT ?,id FROM files INDEXED BY idx_files_exact
       WHERE status='done' AND size=? AND sha256=? AND id>?
@@ -74,13 +108,10 @@ export class Matcher {
           let budget = 10000;
           while (index < batch.length && budget > 0) {
             const item = batch[index]!;
-            if (!groupId)
-              groupId = Number(
-                group.run(item.count, item.size * item.count, item.size * (item.count - 1), id)
-                  .lastInsertRowid
-              );
+            if (!groupId) groupId = Number(group.run(id).lastInsertRowid);
             const { changes } = members.run(groupId, item.size, item.sha256, after, budget);
             if (changes < budget) {
+              refreshGroup(db, groupId);
               index++;
               groupId = 0;
               after = 0;
@@ -97,6 +128,15 @@ export class Matcher {
       }
       ({ size, sha256: hash } = batch[batch.length - 1]!);
     }
+    while (
+      db
+        .prepare(
+          `DELETE FROM dup_groups WHERE id IN (
+      SELECT id FROM dup_groups WHERE match_run=? AND member_count<2 LIMIT 1000)`
+        )
+        .run(id).changes
+    )
+      await yieldLoop();
     db.transaction(() => {
       db.exec("UPDATE match_runs SET status='superseded' WHERE status='active'");
       db.prepare(
