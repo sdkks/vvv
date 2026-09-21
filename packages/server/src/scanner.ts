@@ -4,7 +4,7 @@ import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
-import { processFile } from './hashing.js';
+import { imageHash, processFile, storeImageHash } from './hashing.js';
 
 type Directory = {
   id: number;
@@ -49,7 +49,6 @@ export class Scanner {
       db.exec(
         "UPDATE scans SET status='interrupted', finished_at=datetime('now') WHERE status='running'"
       );
-      db.exec("UPDATE files SET status='pending' WHERE status='hashed'");
     })();
   }
   current(): ScanProgress | null {
@@ -102,34 +101,37 @@ export class Scanner {
       return;
     this.db.transaction(() => {
       const previous = this.db
-        .prepare('SELECT size,mtime_ns,status FROM files WHERE scan_dir_id=? AND rel_path=?')
+        .prepare(
+          `SELECT size,mtime_ns,CASE WHEN kind='image' AND status='done'
+          AND NOT EXISTS (SELECT 1 FROM phashes WHERE file_id=files.id AND frame_idx=0)
+          THEN 'hashed' ELSE status END AS status FROM files WHERE scan_dir_id=? AND rel_path=?`
+        )
         .safeIntegers()
         .get(dir.id, path) as { size: bigint; mtime_ns: bigint; status: string } | undefined;
-      const unchanged =
-        previous?.size === size && previous.mtime_ns === mtime && previous.status === 'done';
+      const unchanged = previous?.size === size && previous.mtime_ns === mtime;
+      const completed = unchanged && previous.status === 'done';
+      const status = error
+        ? 'error'
+        : completed
+          ? 'done'
+          : unchanged && previous.status === 'hashed'
+            ? 'hashed'
+            : 'pending';
       this.db
         .prepare(
           `INSERT INTO files(scan_dir_id,rel_path,kind,size,mtime_ns,status,last_seen_scan_id,error)
         VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(scan_dir_id,rel_path) DO UPDATE SET
         size=excluded.size,mtime_ns=excluded.mtime_ns,status=excluded.status,error=excluded.error,
-        sha256=CASE WHEN excluded.status='done' THEN files.sha256 ELSE NULL END,
+        sha256=CASE WHEN files.size=excluded.size AND files.mtime_ns=excluded.mtime_ns
+          THEN files.sha256 ELSE NULL END,
         last_seen_scan_id=excluded.last_seen_scan_id,updated_at=datetime('now')`
         )
-        .run(
-          dir.id,
-          path,
-          kind,
-          size,
-          mtime,
-          error ? 'error' : unchanged ? 'done' : 'pending',
-          scan,
-          error
-        );
+        .run(dir.id, path, kind, size, mtime, status, scan, error);
       this.db
         .prepare(
           'UPDATE scans SET discovered=discovered+1,processed=processed+?,errors=errors+? WHERE id=?'
         )
-        .run(Number(unchanged || !!error), Number(!!error), scan);
+        .run(Number(completed || !!error), Number(!!error), scan);
     })();
     this.publish();
   }
@@ -214,10 +216,17 @@ export class Scanner {
       while (!this.cancelled) {
         const batch = this.db
           .prepare(
-            `SELECT f.id,d.path,f.rel_path FROM files f JOIN scan_dirs d ON d.id=f.scan_dir_id
-          WHERE f.status='pending' AND f.last_seen_scan_id=? LIMIT 4`
+            `SELECT f.id,d.path,f.rel_path,f.kind,f.status,f.sha256 FROM files f JOIN scan_dirs d ON d.id=f.scan_dir_id
+          WHERE f.status IN ('pending','hashed') AND f.last_seen_scan_id=? LIMIT 4`
           )
-          .all(id) as { id: number; path: string; rel_path: string }[];
+          .all(id) as {
+          id: number;
+          path: string;
+          rel_path: string;
+          kind: string;
+          status: string;
+          sha256: string | null;
+        }[];
         if (!batch.length) break;
         await Promise.all(
           batch.map(async (file) => {
@@ -225,15 +234,25 @@ export class Scanner {
             this.currentFile = path;
             this.publish();
             let error: string | null = null;
+            let image: Awaited<ReturnType<typeof imageHash>> | undefined;
             try {
-              const sha = await processFile(path);
-              this.db
-                .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
-                .run(sha, file.id);
+              if (file.status === 'pending') {
+                const sha = file.sha256 ?? (await processFile(path));
+                this.db
+                  .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
+                  .run(sha, file.id);
+              }
+              if (file.kind === 'image') image = await imageHash(path);
             } catch (cause) {
               error = message(cause);
             }
             this.db.transaction(() => {
+              if (image && this.db.prepare('SELECT id FROM files WHERE id=?').get(file.id)) {
+                storeImageHash(this.db, file.id, image.hash);
+                this.db
+                  .prepare('UPDATE files SET width=?,height=? WHERE id=?')
+                  .run(image.width, image.height, file.id);
+              }
               this.db
                 .prepare("UPDATE files SET status=?,error=?,updated_at=datetime('now') WHERE id=?")
                 .run(error ? 'error' : 'done', error, file.id);

@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
+import { hamming } from './hashing.js';
+import { matchImages } from './image-matcher.js';
 
 type Candidate = { size: number; sha256: string };
 function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
@@ -12,6 +14,13 @@ function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
     `UPDATE dup_groups SET (member_count,total_bytes,reclaimable_bytes)=(
     SELECT count(*),coalesce(sum(f.size),0),coalesce(sum(f.size)-max(f.size),0)
     FROM dup_group_members m JOIN files f ON f.id=m.file_id WHERE m.group_id=?) WHERE id=?`
+  ).run(id, id);
+  db.prepare(
+    `UPDATE dup_group_members AS m SET similarity=phash_distance(
+    (SELECT hash FROM phashes WHERE file_id=m.file_id AND frame_idx=0),
+    (SELECT p.hash FROM dup_group_members r JOIN phashes p ON p.file_id=r.file_id
+      WHERE r.group_id=m.group_id AND p.frame_idx=0 ORDER BY r.file_id LIMIT 1))
+    WHERE group_id=? AND EXISTS (SELECT 1 FROM dup_groups WHERE id=? AND kind='image')`
   ).run(id, id);
 }
 export function deleteScanDir(db: Database.Database, scanDirId: number): number {
@@ -50,6 +59,9 @@ export class Matcher {
     private db: Database.Database,
     private log: FastifyBaseLogger
   ) {
+    db.function('phash_distance', { deterministic: true }, (a, b) =>
+      a instanceof Uint8Array && b instanceof Uint8Array ? hamming(a, b) : null
+    );
     db.exec("UPDATE match_runs SET status='superseded' WHERE status='building'");
   }
   afterScan() {
@@ -128,6 +140,8 @@ export class Matcher {
       }
       ({ size, sha256: hash } = batch[batch.length - 1]!);
     }
+    const imageStats = await matchImages(db, id, (groupId) => refreshGroup(db, groupId));
+    this.log.info({ match_run: id, ...imageStats }, 'Image matching finished');
     while (
       db
         .prepare(

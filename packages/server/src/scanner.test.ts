@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import Fastify from 'fastify';
+import sharp from 'sharp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { Scanner } from './scanner.js';
@@ -49,6 +50,8 @@ async function scan() {
 beforeEach(async () => {
   vi.clearAllMocks();
   hash.mockImplementation(realHashing.processFile);
+  // Traversal tests use text files; real image decoding is covered separately below.
+  vi.mocked(hashing.imageHash).mockResolvedValue({ hash: Buffer.alloc(8), width: 9, height: 8 });
   vi.mocked(fs.lstat).mockImplementation(realFs.lstat);
   directory = await mkdtemp(join(tmpdir(), 'vvv-scanner-'));
   media = join(directory, 'media');
@@ -217,7 +220,7 @@ it('skips unchanged done files using exact bigint nanosecond timestamps, but ret
   expect(hash).toHaveBeenCalledTimes(2);
   db.exec("UPDATE files SET status='error',error='old failure'");
   await scan();
-  expect(hash).toHaveBeenCalledTimes(3);
+  expect(hash).toHaveBeenCalledTimes(2);
   expect(files()).toEqual([
     expect.objectContaining({ status: 'done', error: null, last_seen_scan_id: 5 }),
   ]);
@@ -268,17 +271,14 @@ it('recovers interrupted scans and hashed files on reopen without rehashing comp
   scanner = new Scanner(db, log);
   expect(scanner.current()).toMatchObject({ status: 'interrupted' });
   expect(db.prepare("SELECT status FROM files WHERE rel_path='hashed.mp4'").get()).toEqual({
-    status: 'pending',
+    status: 'hashed',
   });
   expect(db.prepare('SELECT finished_at FROM scans').get()).toEqual({
     finished_at: expect.any(String),
   });
   hash.mockClear();
   await scan();
-  expect(hash.mock.calls.map(([path]) => basename(path)).sort()).toEqual([
-    'hashed.mp4',
-    'pending.jpg',
-  ]);
+  expect(hash.mock.calls.map(([path]) => basename(path)).sort()).toEqual(['pending.jpg']);
   expect(files().every((file) => (file as { status: string }).status === 'done')).toBe(true);
 });
 
@@ -406,6 +406,92 @@ it('does not record stale files when a directory is deleted and its id is reused
   expect(hash).not.toHaveBeenCalled();
   await scan();
   expect(files()).toEqual([expect.objectContaining({ rel_path: 'old.jpg', status: 'done' })]);
+});
+
+it('retries decoding unchanged invalid images without repeating successful SHA work, even after reopen', async () => {
+  seed();
+  const path = await put('invalid.jpg', 'not an image');
+  const sha = createHash('sha256').update('not an image').digest('hex');
+  const checkpoints: unknown[] = [];
+  const decode = vi.mocked(hashing.imageHash).mockImplementation(async (path) => {
+    checkpoints.push(db.prepare('SELECT status FROM files').get());
+    return realHashing.imageHash(path);
+  });
+  await scan();
+  expect(hash).toHaveBeenCalledTimes(1);
+  for (let retry = 0; retry < 3; retry++) {
+    if (retry === 1) {
+      await scanner.close();
+      db.close();
+      db = openDatabase(directory).db;
+      scanner = new Scanner(db, log);
+    }
+    // A restart between discovery and decode also leaves a reusable pending checkpoint.
+    if (retry === 2) db.exec("UPDATE files SET status='pending'");
+    hash.mockClear();
+    decode.mockClear();
+    checkpoints.length = 0;
+    await scan();
+    expect(checkpoints).toEqual([{ status: 'hashed' }]);
+    expect(hash).not.toHaveBeenCalled();
+    expect(decode).toHaveBeenCalledExactlyOnceWith(path);
+    expect(scanner.current()).toMatchObject({ processed: 1, errors: 1 });
+    expect(files()).toEqual([
+      expect.objectContaining({ sha256: sha, status: 'error', error: expect.any(String) }),
+    ]);
+    expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 0 });
+  }
+  await sharp({ create: { width: 18, height: 16, channels: 3, background: 'white' } })
+    .jpeg()
+    .toFile(path);
+  await scan();
+  expect(hash).toHaveBeenCalledExactlyOnceWith(path);
+  expect(scanner.current()).toMatchObject({ processed: 1, errors: 0 });
+  expect(files()).toEqual([expect.objectContaining({ status: 'done', error: null })]);
+  expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 4 });
+});
+
+it('resumes an image SHA checkpoint, records decode errors and refreshes changed image bands', async () => {
+  seed();
+  vi.mocked(hashing.imageHash).mockImplementation(realHashing.imageHash);
+  const path = join(media, 'real.png');
+  await sharp({ create: { width: 18, height: 16, channels: 3, background: 'white' } })
+    .png()
+    .toFile(path);
+  await put('broken.jpg', 'not an image');
+  await scan();
+  expect(scanner.current()).toMatchObject({ processed: 2, errors: 1 });
+  expect(db.prepare('SELECT width,height FROM files WHERE rel_path=?').get('real.png')).toEqual({
+    width: 18,
+    height: 16,
+  });
+  expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 4 });
+  // An older catalog retains its published exact results until the next scan fills missing pHashes.
+  db.exec('DELETE FROM phashes; DELETE FROM phash_bands');
+  hash.mockClear();
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 1 });
+  db.exec(
+    "UPDATE files SET status='hashed' WHERE rel_path='real.png'; DELETE FROM phashes; DELETE FROM phash_bands"
+  );
+  await scanner.close();
+  db.close();
+  db = openDatabase(directory).db;
+  scanner = new Scanner(db, log);
+  hash.mockClear();
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 1 });
+  await sharp({ create: { width: 36, height: 32, channels: 3, background: 'black' } })
+    .png()
+    .toFile(path);
+  await scan();
+  expect(db.prepare('SELECT width,height FROM files WHERE rel_path=?').get('real.png')).toEqual({
+    width: 36,
+    height: 32,
+  });
+  expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 4 });
 });
 
 it('cancels traversal before the missing sweep and drains cleanly on close', async () => {
