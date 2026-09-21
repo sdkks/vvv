@@ -49,7 +49,7 @@ it('returns 202/409, reports durable progress, cancels cooperatively and resumes
   const media = join(directory, 'media');
   await mkdir(media);
   await Promise.all(
-    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.jpg`), `${i}`))
+    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.mp4`), `${i}`))
   );
   const { db } = openDatabase(directory);
   db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(media);

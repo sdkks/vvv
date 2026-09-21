@@ -245,7 +245,7 @@ it('retrieves real traversal errors after completion and reopening the database'
 
 it('streams real scanner snapshots, cancellation and reconnect resync, and closes active SSE on shutdown', async () => {
   await Promise.all(
-    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.jpg`), `${i}`))
+    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.mp4`), `${i}`))
   );
   await register();
   let release!: () => void;

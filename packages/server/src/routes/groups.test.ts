@@ -1,4 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as tick } from 'node:timers/promises';
@@ -418,11 +421,65 @@ it('corrects active results and building groups before, during and after a membe
   expect(clean(await pages())).toEqual(clean(corrected));
 });
 
+it('scans fixture images and serves kind=image and reference distances over live curl with auth', async () => {
+  const media = join(root, 'media');
+  const exec = promisify(execFile);
+  await exec(process.execPath, [
+    fileURLToPath(new URL('../../../../tests/fixtures/generate-images.mjs', import.meta.url)),
+    media,
+  ]);
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const curl = async (path: string, method = 'GET', authenticated = true) => {
+    const { stdout } = await exec('curl', [
+      '--silent',
+      '--show-error',
+      '-X',
+      method,
+      ...(authenticated ? ['-H', `Cookie: ${cookie}`] : []),
+      '-w',
+      '\n%{http_code}',
+      `${address}${path}`,
+    ]);
+    const split = stdout.lastIndexOf('\n');
+    return {
+      status: Number(stdout.slice(split + 1)),
+      body: JSON.parse(stdout.slice(0, split)) as unknown,
+    };
+  };
+  expect((await curl('/api/scans', 'POST')).status).toBe(202);
+  await vi.waitFor(() => expect(activeMatchRun(db)).not.toBeNull());
+  const response = await curl('/api/groups?kind=image');
+  expect(response.status).toBe(200);
+  const images = (response.body as GroupsResponse).items;
+  expect(images.map((g) => g.member_count).sort()).toEqual([2, 4]);
+  for (const group of images) {
+    const detail = await curl(`/api/groups/${group.id}`);
+    expect(detail.status).toBe(200);
+    const members = (detail.body as GroupResponse).members.items;
+    const prefix = members[0]!.path.includes('scene-a') ? 'scene-a' : 'scene-b';
+    expect(members.every((m) => m.path.includes(prefix))).toBe(true);
+    expect(members[0]!.similarity).toBe(0);
+    expect(members.every((m) => typeof m.similarity === 'number')).toBe(true);
+  }
+  expect(((await curl('/api/groups?kind=exact')).body as GroupsResponse).items).toMatchObject([
+    { kind: 'exact', member_count: 2 },
+  ]);
+  const old = activeMatchRun(db);
+  await vi.waitFor(async () => expect((await curl('/api/matches/run', 'POST')).status).toBe(202));
+  await vi.waitFor(() => expect(activeMatchRun(db)).not.toBe(old));
+  for (const [path, method] of [
+    ['/api/groups?kind=image', 'GET'],
+    [`/api/groups/${images[0]!.id}`, 'GET'],
+    ['/api/matches/run', 'POST'],
+  ])
+    expect((await curl(path!, method!, false)).status).toBe(401);
+});
+
 it('automatically matches a completed real scan without a manual match request', async () => {
   const media = join(root, 'media');
   await mkdir(media);
-  await writeFile(join(media, 'one.jpg'), 'equal bytes');
-  await writeFile(join(media, 'two.jpg'), 'equal bytes');
+  await writeFile(join(media, 'one.mp4'), 'equal bytes');
+  await writeFile(join(media, 'two.mp4'), 'equal bytes');
   const response = await app.inject({ method: 'POST', url: '/api/scans', headers: { cookie } });
   expect(response.statusCode).toBe(202);
   await vi.waitFor(async () => {
