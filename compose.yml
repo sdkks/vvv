@@ -1,0 +1,28 @@
+services:
+  vvv:
+    build: .
+    image: localhost/vvv:latest
+    ports:
+      - '8080:8080'
+    environment:
+      # Required: the container refuses to boot without a nonempty password.
+      VVV_PASSWORD: ${VVV_PASSWORD:?VVV_PASSWORD must be set to a strong unique value}
+    volumes:
+      - vvv-data:/data
+      # Set MEDIA_DIR to a directory reachable from the podman host/VM.
+      - ${MEDIA_DIR:-./media}:/media:ro
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+volumes:
+  vvv-data:

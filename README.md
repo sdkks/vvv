@@ -27,15 +27,22 @@ make ci        # typecheck + lint + build + test + secret scan
 Set `VVV_PASSWORD` in your shell, then run `pnpm dev`. Open the Vite URL
 (normally http://localhost:5173); its `/api` proxy connects to port 8080.
 The browser currently has login and an authenticated empty Home screen;
-scanning is available through the API below. The server does not yet serve the built SPA.
+scanning is available through the API below. The built SPA is served by the API server.
 
 - `packages/server`: Fastify API, signed-cookie auth, SQLite bootstrap.
 - `packages/web`: React SPA, Vite development server and production build.
 - `packages/shared`: type-only API contracts; no runtime dependencies.
 
 `pnpm build`, `pnpm typecheck`, `pnpm lint`, and `pnpm test` run across the
-workspace. After building, `pnpm --filter @vvv/server start` starts the API.
+workspace. After building, `pnpm --filter @vvv/server start` serves the API and SPA.
 pnpm runs development processes in parallel without a separate process-manager dependency.
+
+## Container deployment
+
+Run `make image`, then follow [the podman deployment guide](docs/deployment.md)
+for a persistent `/data` volume and read-only media mount, or use `podman compose
+-f compose.yml up -d`. Set a strong `VVV_PASSWORD` and your media path first.
+The image includes the built UI, API, and checksum-verified ffmpeg/ffprobe.
 
 ## Server configuration and deployment assumptions
 
@@ -45,6 +52,12 @@ pnpm runs development processes in parallel without a separate process-manager d
 | `VVV_SESSION_SECRET` | Optional signing secret. Use a long random secret (at least 20 bytes). If unset, generated per boot, invalidating sessions on restart.                                                           |
 | `PORT`               | 8080. The Vite development proxy uses the same PORT value.                                                                                                                                       |
 | `DATA_DIR`           | `./data`, relative to the server working directory (`packages/server` under `pnpm dev`). Created automatically; must be writable. Use a path outside the checkout to keep local data out of Git. |
+
+`SERVE_WEB_DIST` overrides the SPA directory (default: `packages/web/dist`, resolved
+relative to the server module; `/app/web` in the image). Serving is enabled only
+when `index.html` exists; development without a build still works through Vite.
+The public shell renders login; API data remains session-protected. HTML deep links
+return `index.html`; API misses stay JSON (401 without a session, otherwise 404).
 
 Deploy only on a **trusted private network or behind your own access controls**;
 this single-password application is not intended for direct public exposure.

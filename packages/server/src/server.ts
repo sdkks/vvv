@@ -7,8 +7,9 @@ import { Scanner } from './scanner.js';
 import { scanRoutes } from './routes/scans.js';
 import { scanDirRoutes } from './routes/scan-dirs.js';
 import { Progress } from './progress.js';
+import { serveWeb } from './web.js';
 
-export async function createServer(config: Config, logger = true) {
+export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
     logger,
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
@@ -30,5 +31,6 @@ export async function createServer(config: Config, logger = true) {
     db.prepare('SELECT 1').get();
     return { status: 'ok', db: 'ok' };
   });
+  await serveWeb(app, webDist);
   return app;
 }

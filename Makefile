@@ -1,4 +1,4 @@
-.PHONY: all install hooks typecheck lint lint-fix format format-check test test-watch build secrets ci release release-dry clean
+.PHONY: all install hooks typecheck lint lint-fix format format-check test test-watch build secrets ci release release-dry clean image
 
 all: typecheck lint build test
 
@@ -33,6 +33,9 @@ test-watch:
 
 build:
 	pnpm run build
+
+image:
+	podman build --format docker -t localhost/vvv:latest .
 
 # Scan the full git history for leaked secrets
 secrets:
