@@ -9,8 +9,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { Scanner } from './scanner.js';
 import * as hashing from './hashing.js';
+import * as video from './video.js';
 
 vi.mock('./hashing.js', { spy: true });
+vi.mock('./video.js', async (importOriginal) => {
+  const original = await importOriginal<typeof video>();
+  return { ...original, videoHash: vi.fn(original.videoHash) };
+});
 vi.mock('node:fs/promises', { spy: true });
 const realFs = await vi.importActual<typeof fs>('node:fs/promises');
 const realHashing = await vi.importActual<typeof hashing>('./hashing.js');
@@ -52,6 +57,13 @@ beforeEach(async () => {
   hash.mockImplementation(realHashing.processFile);
   // Traversal tests use text files; real image decoding is covered separately below.
   vi.mocked(hashing.imageHash).mockResolvedValue({ hash: Buffer.alloc(8), width: 9, height: 8 });
+  vi.mocked(video.videoHash).mockResolvedValue({
+    hashes: Array.from({ length: 9 }, () => Buffer.alloc(8)),
+    width: 320,
+    height: 240,
+    duration: 2,
+    duration_ms: 2000,
+  });
   vi.mocked(fs.lstat).mockImplementation(realFs.lstat);
   directory = await mkdtemp(join(tmpdir(), 'vvv-scanner-'));
   media = join(directory, 'media');
@@ -492,6 +504,91 @@ it('resumes an image SHA checkpoint, records decode errors and refreshes changed
     height: 32,
   });
   expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 4 });
+});
+
+it.each(['no_duration', 'incomplete_frames', 'timeout'])(
+  'records video %s per-file, continues, and retries without repeating SHA',
+  async (failure) => {
+    seed();
+    await put('bad.mp4');
+    await put('good.jpg');
+    const decode = vi.mocked(video.videoHash).mockRejectedValue(new video.VideoFailure(failure));
+    await scan();
+    expect(scanner.current()).toMatchObject({ processed: 2, errors: 1, status: 'done' });
+    expect(files()).toContainEqual(
+      expect.objectContaining({ rel_path: 'bad.mp4', error: failure, status: 'error' })
+    );
+    expect(
+      db
+        .prepare(
+          'SELECT count(*) AS n FROM phashes WHERE file_id=(SELECT id FROM files WHERE rel_path=?)'
+        )
+        .get('bad.mp4')
+    ).toEqual({ n: 0 });
+    hash.mockClear();
+    decode.mockResolvedValue({
+      hashes: Array.from({ length: 9 }, () => Buffer.alloc(8)),
+      width: 320,
+      height: 240,
+      duration: 2,
+      duration_ms: 2000,
+    });
+    await scan();
+    expect(hash).not.toHaveBeenCalled();
+    expect(scanner.current()).toMatchObject({ processed: 2, errors: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 10 });
+  }
+);
+
+it.each(['cancel', 'shutdown'])(
+  'aborts in-flight video processing on %s and leaves a reusable SHA checkpoint',
+  async (action) => {
+    seed();
+    await put('clip.mp4');
+    let signal: AbortSignal | undefined;
+    vi.mocked(video.videoHash).mockImplementation(async (_path, _frames, options) => {
+      signal = options.signal;
+      await new Promise<void>((_resolve, reject) =>
+        signal!.addEventListener('abort', () => reject(new video.VideoFailure('cancelled')), {
+          once: true,
+        })
+      );
+      throw new Error('unreachable');
+    });
+    const id = scanner.start();
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    if (action === 'cancel') scanner.cancel(Number(id));
+    else await scanner.close();
+    await finished('cancelled');
+    expect(signal!.aborted).toBe(true);
+    expect(files()).toContainEqual(
+      expect.objectContaining({ status: 'hashed', sha256: expect.any(String), error: null })
+    );
+    expect(scanner.current()).toMatchObject({ errors: 0, processed: 0 });
+  }
+);
+
+it('backfills videos from an exact-only catalog without rehashing and applies settings', async () => {
+  seed();
+  await put('clip.mp4');
+  await scan();
+  db.exec('DELETE FROM phashes; DELETE FROM phash_bands');
+  db.exec("INSERT INTO settings VALUES ('video_frame_count','3'),('video_timeout_ms','4567')");
+  hash.mockClear();
+  const decode = vi.mocked(video.videoHash).mockResolvedValue({
+    hashes: Array.from({ length: 3 }, () => Buffer.alloc(8)),
+    width: 320,
+    height: 240,
+    duration: 2,
+    duration_ms: 2000,
+  });
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(decode).toHaveBeenLastCalledWith(join(media, 'clip.mp4'), 3, {
+    timeout: 4567,
+    signal: expect.any(AbortSignal),
+  });
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 3 });
 });
 
 it('cancels traversal before the missing sweep and drains cleanly on close', async () => {

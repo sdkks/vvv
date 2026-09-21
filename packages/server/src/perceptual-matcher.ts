@@ -1,15 +1,18 @@
 import type Database from 'better-sqlite3';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { bandProbes, hamming, hashBands } from './hashing.js';
+import { mediaSetting } from './video.js';
 
 type Image = { id: number; hash: Buffer; size: number; sha256: string | null };
 type Node = { parent: number; near: boolean };
 
-export async function matchImages(
+export async function matchPerceptual(
   db: Database.Database,
   run: number,
-  refresh: (id: number) => void
+  refresh: (id: number) => void,
+  kind: 'image' | 'video'
 ) {
+  const frames = kind === 'image' ? 1 : mediaSetting(db, 'video_frame_count', 9, 64);
   const setting = (key: string, fallback: number, max: number) => {
     const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key) as
       { value: string } | undefined;
@@ -18,41 +21,38 @@ export async function matchImages(
     return value;
   };
   const cap = setting('phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER);
-  const threshold = setting('image_phash_threshold', 6, 64);
+  const threshold = setting(`${kind}_phash_threshold`, kind === 'image' ? 6 : 10, 64);
   let slice = performance.now();
   const pause = async () => {
     await yieldLoop();
     slice = performance.now();
   };
-  const counts = new Uint32Array(4 * 65536);
+  const counts = new Uint32Array(frames * 4 * 65536);
   const skipped: { band_idx: number; frame_idx: number; band_val: number; size: number }[] = [];
   const buckets = db.prepare(`SELECT b.band_idx,b.band_val,count(*) AS size FROM phash_bands b
-    JOIN files f ON f.id=b.file_id WHERE b.band_idx=? AND b.frame_idx=0 AND b.band_val>?
-    AND f.status='done' AND f.kind='image'
+    JOIN files f ON f.id=b.file_id WHERE b.band_idx=? AND b.frame_idx=? AND b.band_val>?
+    AND f.status='done' AND f.kind=?
     GROUP BY b.band_val ORDER BY b.band_val LIMIT 256`);
-  for (let band = 0; band < 4; band++) {
-    let value = -1;
-    for (;;) {
-      const batch = buckets.all(band, value) as {
-        band_idx: number;
-        band_val: number;
-        size: number;
-      }[];
-      if (!batch.length) break;
-      for (const row of batch) {
-        counts[band * 65536 + row.band_val] = row.size;
-        if (row.size > cap) skipped.push({ ...row, frame_idx: 0 });
-        value = row.band_val;
+  for (let frame = 0; frame < frames; frame++)
+    for (let band = 0; band < 4; band++) {
+      let value = -1;
+      for (;;) {
+        const batch = buckets.all(band, frame, value, kind) as {
+          band_idx: number;
+          band_val: number;
+          size: number;
+        }[];
+        if (!batch.length) break;
+        for (const row of batch) {
+          counts[(frame * 4 + band) * 65536 + row.band_val] = row.size;
+          if (row.size > cap) skipped.push({ ...row, frame_idx: frame });
+          value = row.band_val;
+        }
+        await pause();
       }
-      await pause();
     }
-  }
-  db.prepare('UPDATE match_runs SET skipped_buckets=? WHERE id=?').run(
-    JSON.stringify(skipped),
-    run
-  );
-  const usable = (band: number, value: number) => {
-    const count = counts[band * 65536 + value]!;
+  const usable = (frame: number, band: number, value: number) => {
+    const count = counts[(frame * 4 + band) * 65536 + value]!;
     return count > 0 && count <= cap;
   };
   const nodes = new Map<number, Node>();
@@ -74,17 +74,17 @@ export async function matchImages(
     nodes.set(b, { parent: a, near: marked });
     nodes.set(a, { parent: a, near: marked });
   };
-  // Seed only image members: a byte-identical video must not enter an image component.
+  // Seed only same-kind members: byte identity must not bridge media kinds.
   const exact = db.prepare(`SELECT m.group_id,m.file_id FROM dup_groups g
     JOIN dup_group_members m ON m.group_id=g.id JOIN files f ON f.id=m.file_id
     JOIN phashes p ON p.file_id=f.id AND p.frame_idx=0
-    WHERE g.match_run=? AND g.kind='exact' AND f.kind='image' AND f.status='done'
+    WHERE g.match_run=? AND g.kind='exact' AND f.kind=? AND f.status='done'
     AND (m.group_id,m.file_id)>(?,?) ORDER BY m.group_id,m.file_id LIMIT 1000`);
   let group = 0,
     member = 0,
     reference = 0;
   for (;;) {
-    const batch = exact.all(run, group, member) as { group_id: number; file_id: number }[];
+    const batch = exact.all(run, kind, group, member) as { group_id: number; file_id: number }[];
     if (!batch.length) break;
     for (const row of batch) {
       if (row.group_id !== group) reference = row.file_id;
@@ -96,61 +96,92 @@ export async function matchImages(
   }
   const images = db.prepare(`SELECT f.id,p.hash,f.size,f.sha256 FROM phashes p
     JOIN files f ON f.id=p.file_id WHERE f.id>? AND p.frame_idx=0
-    AND f.kind='image' AND f.status='done' ORDER BY f.id LIMIT 64`);
+    AND f.kind=? AND f.status='done' ORDER BY f.id LIMIT 64`);
   const candidates = db.prepare(`SELECT f.id,p.hash,f.size,f.sha256 FROM phash_bands b
-    JOIN files f ON f.id=b.file_id JOIN phashes p ON p.file_id=b.file_id AND p.frame_idx=0
-    WHERE b.band_idx=? AND b.frame_idx=0 AND b.band_val=? AND b.file_id>?
-    AND f.status='done' AND f.kind='image' ORDER BY b.file_id LIMIT 256`);
+    JOIN files f ON f.id=b.file_id JOIN phashes p ON p.file_id=b.file_id AND p.frame_idx=b.frame_idx
+    WHERE b.band_idx=? AND b.frame_idx=? AND b.band_val=? AND b.file_id>?
+    AND f.status='done' AND f.kind=? ORDER BY b.file_id LIMIT 256`);
+  const hashes = db.prepare(
+    'SELECT frame_idx,hash FROM phashes WHERE file_id=? ORDER BY frame_idx'
+  );
+  const cache = new Map<number, Buffer[]>();
+  const load = (id: number) => {
+    let result = cache.get(id);
+    if (!result) {
+      const rows = hashes.all(id) as { frame_idx: number; hash: Buffer }[];
+      result =
+        rows.length === frames && rows.every((r, i) => r.frame_idx === i)
+          ? rows.map((r) => r.hash)
+          : [];
+      if (cache.size >= 512) cache.clear();
+      cache.set(id, result);
+    }
+    return result;
+  };
   let after = 0,
     candidateCount = 0;
   for (;;) {
-    const batch = images.all(after) as Image[];
+    const batch = images.all(after, kind) as Image[];
     if (!batch.length) break;
     for (const source of batch) {
-      const bands = hashBands(source.hash);
-      for (let band = 0; band < 4; band++) {
-        if (!usable(band, bands[band]!)) continue;
-        for (const probe of bandProbes(bands[band]!)) {
-          if (!usable(band, probe)) continue;
-          let cursor = source.id;
-          for (;;) {
-            const targets = candidates.all(band, probe, cursor) as Image[];
-            for (const target of targets) {
-              cursor = target.id;
-              if (
-                source.sha256 !== null &&
-                source.size === target.size &&
-                source.sha256 === target.sha256
-              )
-                continue;
-              // Count each pair only at its first eligible band, without storing a pair set.
-              const other = hashBands(target.hash);
-              if (
-                bands.some((v, i) => {
-                  const xor = v ^ other[i]!;
-                  return (
-                    i < band && usable(i, v) && usable(i, other[i]!) && (xor & (xor - 1)) === 0
-                  );
-                })
-              )
-                continue;
-              candidateCount++;
-              if (
-                find(source.id) !== find(target.id) &&
-                hamming(source.hash, target.hash) <= threshold
-              )
-                union(source.id, target.id, true);
+      after = source.id;
+      const sourceHashes = load(source.id);
+      if (!sourceHashes.length) continue;
+      const sourceBands = sourceHashes.map(hashBands);
+      for (let frame = 0; frame < frames; frame++)
+        for (let band = 0; band < 4; band++) {
+          const bands = sourceBands[frame]!;
+          if (!usable(frame, band, bands[band]!)) continue;
+          for (const probe of bandProbes(bands[band]!)) {
+            if (!usable(frame, band, probe)) continue;
+            let cursor = source.id;
+            for (;;) {
+              const targets = candidates.all(band, frame, probe, cursor, kind) as Image[];
+              for (const target of targets) {
+                cursor = target.id;
+                if (
+                  source.sha256 !== null &&
+                  source.size === target.size &&
+                  source.sha256 === target.sha256
+                )
+                  continue;
+                const targetHashes = load(target.id);
+                if (!targetHashes.length) continue;
+                // Count only the first eligible aligned frame/band, without storing a pair set.
+                if (
+                  sourceBands.some((values, f) => {
+                    if (f > frame) return false;
+                    const other = hashBands(targetHashes[f]!);
+                    return values.some((v, i) => {
+                      const xor = v ^ other[i]!;
+                      return (
+                        (f < frame || i < band) &&
+                        usable(f, i, v) &&
+                        usable(f, i, other[i]!) &&
+                        (xor & (xor - 1)) === 0
+                      );
+                    });
+                  })
+                )
+                  continue;
+                candidateCount++;
+                if (
+                  find(source.id) !== find(target.id) &&
+                  sourceHashes.reduce((sum, hash, i) => sum + hamming(hash, targetHashes[i]!), 0) /
+                    frames <=
+                    threshold
+                )
+                  union(source.id, target.id, true);
+              }
+              if (performance.now() - slice >= 15) await pause();
+              if (targets.length < 256) break;
             }
-            if (performance.now() - slice >= 15) await pause();
-            if (targets.length < 256) break;
           }
         }
-      }
       after = source.id;
       if (performance.now() - slice >= 15) await pause();
     }
   }
-  db.prepare('UPDATE match_runs SET candidate_pairs=? WHERE id=?').run(candidateCount, run);
   // Disk-backed staging orders components without collecting the full catalog or pair set.
   db.exec(
     'CREATE TEMP TABLE image_components(root INTEGER,file_id INTEGER,PRIMARY KEY(root,file_id))'
@@ -172,17 +203,18 @@ export async function matchImages(
       WHERE c.root=? AND c.file_id>? AND f.status='done' ORDER BY c.file_id LIMIT 1000`);
     const create =
       db.prepare(`INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run)
-      VALUES ('image',0,0,0,?)`);
+      VALUES (?,0,0,0,?)`);
     const add = db.prepare(`INSERT INTO dup_group_members(group_id,file_id,similarity)
-      SELECT ?,p.file_id,phash_distance(p.hash,r.hash) FROM phashes p,phashes r
-      JOIN files f ON f.id=p.file_id WHERE p.file_id=? AND r.file_id=?
-      AND p.frame_idx=0 AND r.frame_idx=0 AND f.status='done'`);
+      SELECT ?,p.file_id,avg(phash_distance(p.hash,r.hash)) FROM phashes p
+      JOIN phashes r ON r.frame_idx=p.frame_idx JOIN files f ON f.id=p.file_id
+      WHERE p.file_id=? AND r.file_id=? AND f.status='done'
+      GROUP BY p.file_id HAVING count(*)=?`);
     let root = 0;
     for (;;) {
       const batch = roots.all(root) as { root: number; reference: number }[];
       if (!batch.length) break;
       for (const component of batch) {
-        const id = Number(create.run(run).lastInsertRowid);
+        const id = Number(create.run(kind, run).lastInsertRowid);
         let cursor = 0;
         for (;;) {
           const members = rows.all(component.root, cursor) as { file_id: number }[];
@@ -190,7 +222,7 @@ export async function matchImages(
           db.transaction(() => {
             const ref = reference.get(component.root) as { id: number };
             for (const row of members) {
-              add.run(id, row.file_id, ref.id);
+              add.run(id, row.file_id, ref.id, frames);
               cursor = row.file_id;
             }
           })();

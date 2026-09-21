@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ScanDir, ScanErrorsResponse, ScanProgress } from '@vvv/shared';
+import sharp from 'sharp';
 import { createServer } from '../server.js';
 import { openDatabase } from '../db.js';
 import * as hashing from '../hashing.js';
@@ -245,7 +246,11 @@ it('retrieves real traversal errors after completion and reopening the database'
 
 it('streams real scanner snapshots, cancellation and reconnect resync, and closes active SSE on shutdown', async () => {
   await Promise.all(
-    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.mp4`), `${i}`))
+    Array.from({ length: 8 }, (_, i) =>
+      sharp({ create: { width: 16, height: 16, channels: 3, background: 'red' } })
+        .png()
+        .toFile(join(media, `${i}.png`))
+    )
   );
   await register();
   let release!: () => void;

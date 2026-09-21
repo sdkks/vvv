@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { hamming } from './hashing.js';
-import { matchImages } from './image-matcher.js';
+import { matchPerceptual } from './perceptual-matcher.js';
 
 type Candidate = { size: number; sha256: string };
 function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
@@ -16,11 +16,11 @@ function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
     FROM dup_group_members m JOIN files f ON f.id=m.file_id WHERE m.group_id=?) WHERE id=?`
   ).run(id, id);
   db.prepare(
-    `UPDATE dup_group_members AS m SET similarity=phash_distance(
-    (SELECT hash FROM phashes WHERE file_id=m.file_id AND frame_idx=0),
-    (SELECT p.hash FROM dup_group_members r JOIN phashes p ON p.file_id=r.file_id
-      WHERE r.group_id=m.group_id AND p.frame_idx=0 ORDER BY r.file_id LIMIT 1))
-    WHERE group_id=? AND EXISTS (SELECT 1 FROM dup_groups WHERE id=? AND kind='image')`
+    `UPDATE dup_group_members AS m SET similarity=(
+      SELECT avg(phash_distance(p.hash,r.hash)) FROM phashes p
+      JOIN phashes r ON r.frame_idx=p.frame_idx WHERE p.file_id=m.file_id
+      AND r.file_id=(SELECT min(file_id) FROM dup_group_members WHERE group_id=m.group_id))
+    WHERE group_id=? AND EXISTS (SELECT 1 FROM dup_groups WHERE id=? AND kind IN ('image','video'))`
   ).run(id, id);
 }
 export function deleteScanDir(db: Database.Database, scanDirId: number): number {
@@ -140,8 +140,17 @@ export class Matcher {
       }
       ({ size, sha256: hash } = batch[batch.length - 1]!);
     }
-    const imageStats = await matchImages(db, id, (groupId) => refreshGroup(db, groupId));
-    this.log.info({ match_run: id, ...imageStats }, 'Image matching finished');
+    const stats = [];
+    for (const kind of ['image', 'video'] as const) {
+      const result = await matchPerceptual(db, id, (groupId) => refreshGroup(db, groupId), kind);
+      stats.push(result);
+      this.log.info({ match_run: id, kind, ...result }, 'Perceptual matching finished');
+    }
+    db.prepare('UPDATE match_runs SET candidate_pairs=?,skipped_buckets=? WHERE id=?').run(
+      stats.reduce((sum, result) => sum + result.candidate_pairs, 0),
+      JSON.stringify(stats.flatMap((result) => result.skipped_buckets)),
+      id
+    );
     while (
       db
         .prepare(

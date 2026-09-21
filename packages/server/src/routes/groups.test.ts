@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as tick } from 'node:timers/promises';
 import Database from 'better-sqlite3';
+import sharp from 'sharp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DuplicateGroup, GroupResponse, GroupsResponse } from '@vvv/shared';
 import { createServer } from '../server.js';
@@ -478,8 +479,11 @@ it('scans fixture images and serves kind=image and reference distances over live
 it('automatically matches a completed real scan without a manual match request', async () => {
   const media = join(root, 'media');
   await mkdir(media);
-  await writeFile(join(media, 'one.mp4'), 'equal bytes');
-  await writeFile(join(media, 'two.mp4'), 'equal bytes');
+  const bytes = await sharp({ create: { width: 16, height: 16, channels: 3, background: 'red' } })
+    .png()
+    .toBuffer();
+  await writeFile(join(media, 'one.png'), bytes);
+  await writeFile(join(media, 'two.png'), bytes);
   const response = await app.inject({ method: 'POST', url: '/api/scans', headers: { cookie } });
   expect(response.statusCode).toBe(202);
   await vi.waitFor(async () => {

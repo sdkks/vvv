@@ -46,12 +46,17 @@ export async function imageHash(path: string) {
     .toBuffer();
   return { hash: dHash(pixels), width, height };
 }
-export function storeImageHash(db: Database.Database, fileId: number, hash: Buffer) {
+export const storeImageHash = (db: Database.Database, fileId: number, hash: Buffer) =>
+  storeHashes(db, fileId, [hash]);
+export function storeHashes(db: Database.Database, fileId: number, hashes: Buffer[]) {
   db.prepare('DELETE FROM phash_bands WHERE file_id=?').run(fileId);
   db.prepare('DELETE FROM phashes WHERE file_id=?').run(fileId);
-  db.prepare('INSERT INTO phashes(file_id,frame_idx,hash) VALUES (?,0,?)').run(fileId, hash);
+  const phash = db.prepare('INSERT INTO phashes(file_id,frame_idx,hash) VALUES (?,?,?)');
   const insert = db.prepare(
-    'INSERT INTO phash_bands(band_idx,frame_idx,band_val,file_id) VALUES (?,0,?,?)'
+    'INSERT INTO phash_bands(band_idx,frame_idx,band_val,file_id) VALUES (?,?,?,?)'
   );
-  hashBands(hash).forEach((value, band) => insert.run(band, value, fileId));
+  hashes.forEach((hash, frame) => {
+    phash.run(fileId, frame, hash);
+    hashBands(hash).forEach((value, band) => insert.run(band, frame, value, fileId));
+  });
 }

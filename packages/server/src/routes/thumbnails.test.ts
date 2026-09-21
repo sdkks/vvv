@@ -16,6 +16,7 @@ import sharp from 'sharp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db.js';
 import { createServer } from '../server.js';
+import * as video from '../video.js';
 
 const config = { password: 'thumb-test-password', sessionSecret: 'thumb-test-session', port: 8080 };
 let root: string;
@@ -125,7 +126,7 @@ it('rejects unauthenticated access before generating anything', async () => {
   expect(await readdir(join(root, 'data', 'thumbs'))).toEqual([]);
 });
 
-it('returns JSON 404 for unknown, video, every non-done status, and missing files even when cached', async () => {
+it('returns JSON 404 for unknown ids, missing videos, non-done files, and vanished cached sources', async () => {
   await image();
   expectMissing(await get(999));
   expectMissing(await get(put('video.mp4', 'video')));
@@ -139,6 +140,42 @@ it('returns JSON 404 for unknown, video, every non-done status, and missing file
   db.prepare("UPDATE files SET status='done' WHERE id=?").run(id);
   await unlink(join(media, 'image.jpg'));
   expectMissing(await get(id));
+});
+
+it.each([new Error('spawn ffmpeg ENOENT'), new Error('EIO'), new video.VideoFailure('timeout')])(
+  'logs video operational failures as 500: %s',
+  async (error) => {
+    await writeFile(join(media, 'video.mp4'), 'source');
+    const id = put('video.mp4', 'video');
+    db.prepare('UPDATE files SET duration_ms=2000 WHERE id=?').run(id);
+    vi.spyOn(video, 'videoThumbnail').mockRejectedValue(error);
+    const log = vi.spyOn(app.log, 'error');
+    expect((await get(id)).statusCode).toBe(500);
+    expect(log).toHaveBeenCalledWith(
+      { file_id: String(id), err: error },
+      'Thumbnail generation failed'
+    );
+  }
+);
+
+it('aborts in-flight thumbnail extraction before shutdown waits for requests', async () => {
+  await writeFile(join(media, 'video.mp4'), 'source');
+  const id = put('video.mp4', 'video');
+  db.prepare('UPDATE files SET duration_ms=2000 WHERE id=?').run(id);
+  let signal: AbortSignal | undefined;
+  vi.spyOn(video, 'videoThumbnail').mockImplementation(async (_path, _duration, options) => {
+    signal = options.signal;
+    return new Promise<never>((_resolve, reject) =>
+      signal!.addEventListener('abort', () => reject(new video.VideoFailure('cancelled')), {
+        once: true,
+      })
+    );
+  });
+  const response = get(id).then((r) => r);
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  await app.close();
+  expect(signal!.aborted).toBe(true);
+  expect((await response).statusCode).toBe(500);
 });
 
 it('validates ids without allowing paths in cache filenames', async () => {

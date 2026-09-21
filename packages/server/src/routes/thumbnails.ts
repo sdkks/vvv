@@ -5,8 +5,16 @@ import { constants } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { idParams } from './scans.js';
+import { MediaWork, mediaSetting, VideoFailure, videoThumbnail } from '../video.js';
 
-type File = { path: string; rel_path: string; token: string; sha256: string | null };
+type File = {
+  path: string;
+  rel_path: string;
+  token: string;
+  sha256: string | null;
+  kind: string;
+  duration_ms: number | null;
+};
 const hasCode = (error: unknown, code: string) =>
   error instanceof Error && 'code' in error && error.code === code;
 
@@ -26,10 +34,15 @@ function isDecodeRejection(message: string) {
   );
 }
 
-export function thumbnailRoutes(app: FastifyInstance, db: Database.Database, dataDir: string) {
-  const lookup = db.prepare(`SELECT d.path,d.token,f.rel_path,f.sha256
+export function thumbnailRoutes(
+  app: FastifyInstance,
+  db: Database.Database,
+  dataDir: string,
+  media: MediaWork
+) {
+  const lookup = db.prepare(`SELECT d.path,d.token,f.rel_path,f.sha256,f.kind,f.duration_ms
     FROM files f JOIN scan_dirs d ON d.id=f.scan_dir_id
-    WHERE f.id=? AND f.kind='image' AND f.status='done'`);
+    WHERE f.id=? AND f.status='done'`);
   const pending = new Map<string, Promise<{ bytes: Buffer; file: File } | null>>();
   async function load(id: string) {
     const file = lookup.get(id) as File | undefined;
@@ -60,12 +73,23 @@ export function thumbnailRoutes(app: FastifyInstance, db: Database.Database, dat
     }
     let bytes: Buffer;
     try {
-      bytes = await sharp(source)
-        .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
-        .jpeg()
-        .toBuffer();
+      bytes = await media.run(() =>
+        file.kind === 'video'
+          ? videoThumbnail(source, file.duration_ms ?? 0, {
+              timeout: mediaSetting(db, 'video_timeout_ms', 120000, 2147483647),
+              signal: media.shutdown.signal,
+            })
+          : sharp(source)
+              .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
+              .jpeg()
+              .toBuffer()
+      );
     } catch (error) {
-      if (error instanceof Error && isDecodeRejection(error.message)) {
+      if (
+        (error instanceof VideoFailure &&
+          ['content_unavailable', 'no_duration'].includes(error.code)) ||
+        (file.kind === 'image' && error instanceof Error && isDecodeRejection(error.message))
+      ) {
         app.log.warn({ file_id: id, err: error }, 'Thumbnail source is undecodable');
         return null;
       }

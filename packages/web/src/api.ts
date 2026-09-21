@@ -12,6 +12,8 @@ import type {
   ScanErrorsResponse,
 } from '@vvv/shared';
 
+export class ThumbnailUnavailableError extends Error {}
+
 export class ResultsChangedError extends Error {
   constructor() {
     super('Results changed — a new match completed');
@@ -49,6 +51,8 @@ async function request(path: string, init?: RequestInit) {
       (response.status === 404 && code === 'group_not_found')
     )
       throw new ResultsChangedError();
+    if (response.status === 404 && code === 'thumbnail_not_found')
+      throw new ThumbnailUnavailableError('No thumbnail available');
     const messages: Record<string, string> = {
       match_running: 'Matching is already running. Try again shortly.',
       scan_running: 'A scan is already running. Refresh to see its progress.',

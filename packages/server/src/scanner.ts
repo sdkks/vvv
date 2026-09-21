@@ -4,7 +4,8 @@ import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
-import { imageHash, processFile, storeImageHash } from './hashing.js';
+import { imageHash, processFile, storeHashes } from './hashing.js';
+import { MediaWork, mediaSetting, videoHash } from './video.js';
 
 type Directory = {
   id: number;
@@ -37,13 +38,15 @@ const isVanishedOrLoop = (error: unknown) =>
 
 export class Scanner {
   private cancelled = false;
+  private abort = new AbortController();
   private task?: Promise<void>;
   private currentFile?: string;
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
     private onProgress?: (snapshot: ScanProgress) => void,
-    private onDone?: () => void
+    private onDone?: () => void,
+    private media = new MediaWork()
   ) {
     db.transaction(() => {
       db.exec(
@@ -70,6 +73,7 @@ export class Scanner {
       this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
     );
     this.cancelled = false;
+    this.abort = new AbortController();
     this.publish();
     this.task = this.run(id).finally(() => {
       this.task = undefined;
@@ -77,10 +81,14 @@ export class Scanner {
     return id;
   }
   cancel(id: number) {
-    if (this.current()?.id === id && this.task) this.cancelled = true;
+    if (this.current()?.id === id && this.task) {
+      this.cancelled = true;
+      this.abort.abort();
+    }
   }
   async close() {
     this.cancelled = true;
+    this.abort.abort();
     await this.task;
   }
   private record(
@@ -102,7 +110,7 @@ export class Scanner {
     this.db.transaction(() => {
       const previous = this.db
         .prepare(
-          `SELECT size,mtime_ns,CASE WHEN kind='image' AND status='done'
+          `SELECT size,mtime_ns,CASE WHEN status='done'
           AND NOT EXISTS (SELECT 1 FROM phashes WHERE file_id=files.id AND frame_idx=0)
           THEN 'hashed' ELSE status END AS status FROM files WHERE scan_dir_id=? AND rel_path=?`
         )
@@ -229,42 +237,64 @@ export class Scanner {
         }[];
         if (!batch.length) break;
         await Promise.all(
-          batch.map(async (file) => {
-            const path = join(file.path, file.rel_path);
-            this.currentFile = path;
-            this.publish();
-            let error: string | null = null;
-            let image: Awaited<ReturnType<typeof imageHash>> | undefined;
-            try {
-              if (file.status === 'pending') {
-                const sha = file.sha256 ?? (await processFile(path));
-                this.db
-                  .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
-                  .run(sha, file.id);
-              }
-              if (file.kind === 'image') image = await imageHash(path);
-            } catch (cause) {
-              error = message(cause);
-            }
-            this.db.transaction(() => {
-              if (image && this.db.prepare('SELECT id FROM files WHERE id=?').get(file.id)) {
-                storeImageHash(this.db, file.id, image.hash);
-                this.db
-                  .prepare('UPDATE files SET width=?,height=? WHERE id=?')
-                  .run(image.width, image.height, file.id);
-              }
-              this.db
-                .prepare("UPDATE files SET status=?,error=?,updated_at=datetime('now') WHERE id=?")
-                .run(error ? 'error' : 'done', error, file.id);
-              this.db
-                .prepare('UPDATE scans SET processed=processed+1,errors=errors+? WHERE id=?')
-                .run(Number(!!error), id);
-            })();
-            this.publish();
-            if (error) {
-              this.log.warn({ scan_id: id, file_id: file.id, error }, 'File processing failed');
-            }
-          })
+          batch.map((file) =>
+            this.media
+              .run(async () => {
+                const path = join(file.path, file.rel_path);
+                this.currentFile = path;
+                this.publish();
+                let error: string | null = null;
+                let result:
+                  | { hashes: Buffer[]; width?: number; height?: number; duration_ms?: number }
+                  | undefined;
+                try {
+                  if (file.status === 'pending') {
+                    const sha = file.sha256 ?? (await processFile(path));
+                    this.db
+                      .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
+                      .run(sha, file.id);
+                  }
+                  if (file.kind === 'image') {
+                    const image = await imageHash(path);
+                    result = { ...image, hashes: [image.hash] };
+                  } else
+                    result = await videoHash(
+                      path,
+                      mediaSetting(this.db, 'video_frame_count', 9, 64),
+                      {
+                        timeout: mediaSetting(this.db, 'video_timeout_ms', 120000, 2147483647),
+                        signal: this.abort.signal,
+                      }
+                    );
+                } catch (cause) {
+                  if (this.abort.signal.aborted) return;
+                  error = message(cause);
+                }
+                this.db.transaction(() => {
+                  if (result && this.db.prepare('SELECT id FROM files WHERE id=?').get(file.id)) {
+                    storeHashes(this.db, file.id, result.hashes);
+                    this.db
+                      .prepare('UPDATE files SET width=?,height=?,duration_ms=? WHERE id=?')
+                      .run(result.width, result.height, result.duration_ms ?? null, file.id);
+                  }
+                  this.db
+                    .prepare(
+                      "UPDATE files SET status=?,error=?,updated_at=datetime('now') WHERE id=?"
+                    )
+                    .run(error ? 'error' : 'done', error, file.id);
+                  this.db
+                    .prepare('UPDATE scans SET processed=processed+1,errors=errors+? WHERE id=?')
+                    .run(Number(!!error), id);
+                })();
+                this.publish();
+                if (error) {
+                  this.log.warn({ scan_id: id, file_id: file.id, error }, 'File processing failed');
+                }
+              }, this.abort.signal)
+              .catch((error: unknown) => {
+                if (!this.cancelled) throw error;
+              })
+          )
         );
         this.currentFile = undefined;
       }

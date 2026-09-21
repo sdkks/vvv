@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { createServer } from '../server.js';
 import { openDatabase } from '../db.js';
 import * as hashing from '../hashing.js';
@@ -49,7 +50,11 @@ it('returns 202/409, reports durable progress, cancels cooperatively and resumes
   const media = join(directory, 'media');
   await mkdir(media);
   await Promise.all(
-    Array.from({ length: 8 }, (_, i) => writeFile(join(media, `${i}.mp4`), `${i}`))
+    Array.from({ length: 8 }, (_, i) =>
+      sharp({ create: { width: 16, height: 16, channels: 3, background: 'red' } })
+        .png()
+        .toFile(join(media, `${i}.png`))
+    )
   );
   const { db } = openDatabase(directory);
   db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(media);

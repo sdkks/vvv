@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, getThumbnail, ResultsChangedError } from './api';
+import { api, getThumbnail, ResultsChangedError, ThumbnailUnavailableError } from './api';
 import {
   groupsKey,
   isVideo,
@@ -199,10 +199,21 @@ it('redirects thumbnail 401s with the complete return location', async () => {
   await expect(getThumbnail(42, new AbortController().signal)).rejects.toThrow('Please sign in');
   expect(replace).toHaveBeenCalledWith('/login?returnTo=%2Fgroups%2F4%3Fkind%3Dexact%23member');
 });
+it('keeps operational thumbnail failures distinct from content-unavailable responses', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(Response.json({ error: 'thumbnail_failed' }, { status: 500 }))
+  );
+  await expect(getThumbnail(42, new AbortController().signal)).rejects.not.toBeInstanceOf(
+    ThumbnailUnavailableError
+  );
+});
 it('rejects missing thumbnails rather than returning an image blob', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue(Response.json({ error: 'thumbnail_not_found' }, { status: 404 }))
   );
-  await expect(getThumbnail(42, new AbortController().signal)).rejects.toThrow('Request failed');
+  await expect(getThumbnail(42, new AbortController().signal)).rejects.toBeInstanceOf(
+    ThumbnailUnavailableError
+  );
 });

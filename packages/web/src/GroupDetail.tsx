@@ -2,40 +2,47 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import type { GroupMember } from '@vvv/shared';
-import { getGroup, getThumbnail, ResultsChangedError } from './api';
-import { formatBytes, formatDuration, isVideo, reviewShortcut, toggleMarked } from './group-review';
+import { getGroup, getThumbnail, ResultsChangedError, ThumbnailUnavailableError } from './api';
+import { formatBytes, formatDuration, reviewShortcut, toggleMarked } from './group-review';
 
 function Thumbnail({ member }: { member: GroupMember }) {
   const [src, setSrc] = useState('');
-  const video = isVideo(member.path);
+  const [message, setMessage] = useState('Loading thumbnail…');
   useEffect(() => {
-    if (video) return;
+    setSrc('');
+    setMessage('Loading thumbnail…');
     const controller = new AbortController();
     let url = '';
     void getThumbnail(member.file_id, controller.signal)
       .then((blob) => {
         if (!controller.signal.aborted) setSrc((url = URL.createObjectURL(blob)));
       })
-      .catch(() => setSrc(''));
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted)
+          setMessage(
+            error instanceof ThumbnailUnavailableError
+              ? 'No thumbnail available'
+              : 'Thumbnail failed to load'
+          );
+      });
     return () => {
       controller.abort();
       URL.revokeObjectURL(url);
     };
-  }, [member.file_id, video]);
+  }, [member.file_id]);
   return src ? (
     <img
       className="thumbnail"
       src={src}
       alt={member.path}
       loading="lazy"
-      onError={() => setSrc('')}
+      onError={() => {
+        setSrc('');
+        setMessage('Thumbnail failed to load');
+      }}
     />
   ) : (
-    <span className={`thumbnail fallback ${video ? 'video' : ''}`}>
-      {video
-        ? 'No preview yet — video thumbnails arrive with video support'
-        : 'No thumbnail available'}
-    </span>
+    <span className="thumbnail fallback">{message}</span>
   );
 }
 export function GroupDetail({

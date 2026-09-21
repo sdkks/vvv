@@ -14,6 +14,7 @@ import { Matcher } from './matcher.js';
 import { groupRoutes } from './routes/groups.js';
 import { exportRoutes } from './routes/export.js';
 import { thumbnailRoutes } from './routes/thumbnails.js';
+import { MediaWork } from './video.js';
 
 export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
@@ -24,14 +25,17 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   const { db, openReadOnly } = openDatabase(config.dataDir);
   const progress = new Progress();
   const matcher = new Matcher(db, app.log);
+  const media = new MediaWork();
   const scanner = new Scanner(
     db,
     app.log,
     (snapshot) => progress.publish(snapshot),
-    () => matcher.afterScan()
+    () => matcher.afterScan(),
+    media
   );
   app.addHook('preClose', async () => {
     progress.close();
+    media.shutdown.abort();
     await scanner.close();
     await matcher.close();
   });
@@ -43,7 +47,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   scanDirRoutes(app, db);
   groupRoutes(app, db, matcher);
   exportRoutes(app, openReadOnly);
-  thumbnailRoutes(app, db, config.dataDir);
+  thumbnailRoutes(app, db, config.dataDir, media);
   app.get('/api/health', async (): Promise<HealthResponse> => {
     db.prepare('SELECT 1').get();
     return { status: 'ok', db: 'ok' };
