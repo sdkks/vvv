@@ -8,23 +8,54 @@ type Candidate = { size: number; sha256: string };
 function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
   db.prepare(
     `DELETE FROM dup_group_members AS m WHERE group_id=? AND EXISTS (
-    SELECT 1 FROM files f WHERE f.id=m.file_id AND (f.scan_dir_id=? OR f.status<>'done'))`
+    SELECT 1 FROM files f WHERE f.id=m.file_id
+    AND (f.scan_dir_id=? OR f.status NOT IN ('done','quarantined')))`
   ).run(id, scanDirId);
   db.prepare(
     `UPDATE dup_groups SET (member_count,total_bytes,reclaimable_bytes)=(
     SELECT count(*),coalesce(sum(f.size),0),coalesce(sum(f.size)-max(f.size),0)
-    FROM dup_group_members m JOIN files f ON f.id=m.file_id WHERE m.group_id=?) WHERE id=?`
+    FROM dup_group_members m JOIN files f ON f.id=m.file_id
+    WHERE m.group_id=? AND f.status='done') WHERE id=?`
   ).run(id, id);
   db.prepare(
     `UPDATE dup_group_members AS m SET similarity=(
       SELECT avg(phash_distance(p.hash,r.hash)) FROM phashes p
       JOIN phashes r ON r.frame_idx=p.frame_idx WHERE p.file_id=m.file_id
-      AND r.file_id=(SELECT min(file_id) FROM dup_group_members WHERE group_id=m.group_id))
+      AND r.file_id=(SELECT min(n.file_id) FROM dup_group_members n JOIN files f ON f.id=n.file_id
+        WHERE n.group_id=m.group_id AND f.status='done'))
     WHERE group_id=? AND EXISTS (SELECT 1 FROM dup_groups WHERE id=? AND kind IN ('image','video'))`
   ).run(id, id);
 }
-export function deleteScanDir(db: Database.Database, scanDirId: number): number {
-  return db.transaction(() => {
+export function refreshFileGroups(db: Database.Database, fileId: number) {
+  let after = 0;
+  for (;;) {
+    const rows = db
+      .prepare(
+        `SELECT group_id AS id FROM dup_group_members
+      WHERE file_id=? AND group_id>? ORDER BY group_id LIMIT 100`
+      )
+      .all(fileId, after) as { id: number }[];
+    if (!rows.length) break;
+    for (const { id } of rows) {
+      refreshGroup(db, id);
+      db.prepare('DELETE FROM dup_groups WHERE id=? AND member_count<2 AND match_run=?').run(
+        id,
+        activeMatchRun(db)
+      );
+      after = id;
+    }
+  }
+}
+export function deleteScanDir(db: Database.Database, scanDirId: number): number | null {
+  const remove = db.transaction(() => {
+    // Hold the writer lock from the journal check through all catalog deletions.
+    const pending = db
+      .prepare(
+        `SELECT 1 FROM file_operations o JOIN files f ON f.id=o.file_id
+        WHERE o.status != 'committed' AND o.status IN ('pending','fs_done') AND f.scan_dir_id=? LIMIT 1`
+      )
+      .get(scanDirId);
+    if (pending) return null;
     const active = activeMatchRun(db);
     const affected = db.prepare(`SELECT g.id FROM dup_groups g WHERE g.id>?
       AND (g.match_run=? OR g.match_run IN (SELECT id FROM match_runs WHERE status='building'))
@@ -45,7 +76,8 @@ export function deleteScanDir(db: Database.Database, scanDirId: number): number 
       }
     }
     return db.prepare('DELETE FROM scan_dirs WHERE id=?').run(scanDirId).changes;
-  })();
+  });
+  return remove.immediate();
 }
 export function activeMatchRun(db: Database.Database): number | null {
   const row = db.prepare("SELECT value FROM settings WHERE key='active_match_run'").get() as

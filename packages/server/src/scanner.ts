@@ -107,6 +107,19 @@ export class Scanner {
         .get(dir.id, dir.path, dir.token)
     )
       return;
+    if (
+      this.db
+        .prepare(
+          `SELECT f.id FROM files f WHERE f.scan_dir_id=? AND f.rel_path=?
+      AND (EXISTS (SELECT 1 FROM trash t WHERE t.file_id=f.id AND t.restored=0)
+      OR EXISTS (SELECT 1 FROM file_operations o WHERE o.file_id=f.id AND o.status != 'committed'
+        AND o.status IN ('pending','fs_done')))`
+        )
+        .get(dir.id, path)
+    ) {
+      this.log.info({ scan_dir_id: dir.id, path }, 'Skipped quarantined path');
+      return;
+    }
     this.db.transaction(() => {
       const previous = this.db
         .prepare(
@@ -209,7 +222,9 @@ export class Scanner {
         const unseen = this.db
           .prepare(
             `SELECT id FROM files WHERE id>? AND last_seen_scan_id IS NOT ?
-            AND status NOT IN ('missing','quarantined') ORDER BY id LIMIT 100`
+            AND status NOT IN ('missing','quarantined') AND NOT EXISTS (
+              SELECT 1 FROM file_operations o WHERE o.file_id=files.id
+              AND o.status != 'committed' AND o.status IN ('pending','fs_done')) ORDER BY id LIMIT 100`
           )
           .all(after, id) as { id: number }[];
         if (!unseen.length) break;

@@ -4,6 +4,7 @@ import { scansMigration } from './migrations/001-scans.js';
 import { scanDirTokenMigration } from './migrations/002-scan-dir-token.js';
 import { matchesMigration } from './migrations/003-matches.js';
 import { phashesMigration } from './migrations/004-phashes.js';
+import { quarantineMigration } from './migrations/005-quarantine.js';
 
 const migrations = [
   'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -11,6 +12,7 @@ const migrations = [
   scanDirTokenMigration,
   matchesMigration,
   phashesMigration,
+  quarantineMigration,
 ];
 export function openDatabase(dataDir: string) {
   const path = join(dataDir, 'vvv.db');

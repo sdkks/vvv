@@ -102,3 +102,25 @@ export interface ExportGroup {
 export interface ExportResponse {
   groups: ExportGroup[];
 }
+export interface QuarantineResponse {
+  moved: { file_id: number; trash_id: number }[];
+  failed: { file_id: number; error: string }[];
+}
+export interface RestoreResponse {
+  restored: { trash_id: number; file_id: number }[];
+  failed: { trash_id: number; error: string }[];
+}
+export interface PurgeResponse {
+  purged: number;
+  failed: { trash_id: number; error: string }[];
+}
+export interface TrashItem {
+  id: number;
+  file_id: number;
+  scan_dir_id: number;
+  path: string;
+  trash_rel_path: string;
+  size: number;
+  quarantined_at: string;
+  purge_after: string | null;
+}

@@ -98,8 +98,9 @@ export function scanDirRoutes(app: FastifyInstance, db: Database.Database) {
     '/api/scan-dirs/:id',
     { schema: { params: idParams } },
     async (request, reply) => {
-      if (!deleteScanDir(db, Number(request.params.id)))
-        return reply.code(404).send({ error: 'directory_not_found' });
+      const deleted = deleteScanDir(db, Number(request.params.id));
+      if (deleted === null) return reply.code(409).send({ error: 'operations_in_progress' });
+      if (!deleted) return reply.code(404).send({ error: 'directory_not_found' });
       return reply.code(204).send();
     }
   );

@@ -21,11 +21,11 @@ it('migrates once, applies writer pragmas and persists settings across reopen', 
   expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
   expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
   expect(db.pragma('synchronous', { simple: true })).toBe(1);
-  expect(db.pragma('user_version', { simple: true })).toBe(5);
+  expect(db.pragma('user_version', { simple: true })).toBe(6);
   db.prepare('INSERT INTO settings VALUES (?, ?)').run('example', 'durable');
   db.close();
   const reopened = openDatabase(directory).db;
-  expect(reopened.prepare('SELECT * FROM settings').get()).toEqual({
+  expect(reopened.prepare("SELECT * FROM settings WHERE key='example'").get()).toEqual({
     key: 'example',
     value: 'durable',
   });
@@ -38,8 +38,10 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
     INSERT INTO settings VALUES ('retained', 'yes'); PRAGMA user_version=1`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(5);
-  expect(db.prepare('SELECT value FROM settings').get()).toEqual({ value: 'yes' });
+  expect(db.pragma('user_version', { simple: true })).toBe(6);
+  expect(db.prepare("SELECT value FROM settings WHERE key='retained'").get()).toEqual({
+    value: 'yes',
+  });
   expect(
     db
       .prepare(
@@ -73,7 +75,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
   ).toThrow(/FOREIGN KEY/);
   db.close();
   const reopened = openDatabase(directory).db;
-  expect(reopened.pragma('user_version', { simple: true })).toBe(5);
+  expect(reopened.pragma('user_version', { simple: true })).toBe(6);
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 1 });
   reopened.exec('DELETE FROM scan_dirs WHERE id=1');
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 0 });
@@ -90,7 +92,7 @@ it('upgrades an existing scanned catalog and creates match indexes and cascading
     VALUES (1,'retained.jpg','image',10,0,'done','hash'); PRAGMA user_version=3`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(5);
+  expect(db.pragma('user_version', { simple: true })).toBe(6);
   expect(db.prepare('SELECT rel_path,status,sha256 FROM files').get()).toEqual({
     rel_path: 'retained.jpg',
     status: 'done',
@@ -126,7 +128,9 @@ it('provides a read-only connection that can iterate while the writer changes da
   const reader = openReadOnly();
   try {
     expect(() => reader.exec("INSERT INTO settings VALUES ('c', '3')")).toThrow(/readonly/);
-    const rows = reader.prepare('SELECT * FROM settings ORDER BY key').iterate();
+    const rows = reader
+      .prepare("SELECT * FROM settings WHERE key IN ('a','b') ORDER BY key")
+      .iterate();
     try {
       expect(rows.next().value).toEqual({ key: 'a', value: '1' });
       db.exec("UPDATE settings SET value = 'updated' WHERE key = 'b'");

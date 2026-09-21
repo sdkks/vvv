@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { Scanner } from './scanner.js';
+import { Quarantine } from './quarantine.js';
 import * as hashing from './hashing.js';
 import * as video from './video.js';
 
@@ -266,6 +267,53 @@ it('marks unseen files missing in bounded batches, leaves quarantined rows alone
   expect(files()).toContainEqual(
     expect.objectContaining({ rel_path: 'gone.jpg', status: 'done', last_seen_scan_id: 3 })
   );
+});
+
+it('skips and logs replacement files at quarantined paths without corrupting trash identity', async () => {
+  seed();
+  await put('original.jpg', 'original');
+  await scan();
+  const quarantine = new Quarantine(db, log);
+  const moved = await quarantine.change('quarantine', 1);
+  const before = db.prepare('SELECT * FROM files').get();
+  await put('original.jpg', 'replacement with a different size');
+  hash.mockClear();
+  const info = vi.spyOn(log, 'info');
+  try {
+    await scan();
+    expect(hash).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT * FROM files').get()).toEqual(before);
+    expect(db.prepare('SELECT file_id,restored FROM trash WHERE id=?').get(moved.trash_id)).toEqual(
+      { file_id: 1, restored: 0 }
+    );
+    expect(info).toHaveBeenCalledWith(
+      { scan_dir_id: 1, path: 'original.jpg' },
+      'Skipped quarantined path'
+    );
+    await expect(quarantine.change('restore', moved.trash_id)).rejects.toThrow(
+      'destination_exists'
+    );
+  } finally {
+    info.mockRestore();
+  }
+});
+
+it('does not rediscover or sweep paths with an unsettled filesystem intent', async () => {
+  seed();
+  await put('present.jpg');
+  await put('moved.jpg');
+  await scan();
+  const before = files();
+  db.prepare(
+    `INSERT INTO file_operations(kind,file_id,src_path,status)
+    SELECT 'quarantine',id,? || rel_path,'pending' FROM files`
+  ).run(media + '/');
+  await unlink(join(media, 'moved.jpg'));
+  await put('present.jpg', 'changed');
+  hash.mockClear();
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(files()).toEqual(before);
 });
 
 it('recovers interrupted scans and hashed files on reopen without rehashing completed work', async () => {

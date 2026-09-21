@@ -6,7 +6,7 @@ import Fastify from 'fastify';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
-import { activeMatchRun, Matcher } from './matcher.js';
+import { activeMatchRun, deleteScanDir, Matcher } from './matcher.js';
 
 let root: string;
 let db: ReturnType<typeof openDatabase>['db'];
@@ -204,6 +204,29 @@ it('seeks member publication by exact hash instead of rescanning all completed f
     plan.some(({ detail }) => detail.includes('idx_files_status') || detail.includes('TEMP B-TREE'))
   ).toBe(false);
 });
+
+it.each(['pending', 'fs_done'])(
+  'blocks only the directory owning a %s journal row and allows deletion once it settles',
+  (status) => {
+    put('one.jpg', 1, 'same');
+    db.exec("INSERT INTO scan_dirs(path) VALUES ('/other')");
+    db.prepare(
+      `INSERT INTO file_operations(kind,file_id,src_path,dst_path,status)
+       VALUES ('quarantine',1,'/media/one.jpg','/media/.vvv-trash/one.jpg',?)`
+    ).run(status);
+    expect(deleteScanDir(db, 1)).toBeNull();
+    expect(db.prepare('SELECT scan_dir_id FROM files').all()).toEqual([{ scan_dir_id: 1 }]);
+    expect(deleteScanDir(db, 2)).toBe(1);
+    expect(deleteScanDir(db, 999)).toBe(0);
+    db.prepare('UPDATE file_operations SET status=?').run(
+      status === 'pending' ? 'failed' : 'committed'
+    );
+    expect(deleteScanDir(db, 1)).toBe(1);
+    expect(db.prepare('SELECT * FROM scan_dirs').all()).toEqual([]);
+    expect(db.prepare('SELECT * FROM files').all()).toEqual([]);
+    expect(db.prepare('SELECT * FROM file_operations').all()).toHaveLength(1);
+  }
+);
 
 it('coalesces scan completion during a match into one subsequent run', async () => {
   const started = vi.spyOn(log, 'info');

@@ -15,6 +15,9 @@ import { groupRoutes } from './routes/groups.js';
 import { exportRoutes } from './routes/export.js';
 import { thumbnailRoutes } from './routes/thumbnails.js';
 import { MediaWork } from './video.js';
+import { Quarantine } from './quarantine.js';
+import { reconcile } from './reconcile.js';
+import { trashRoutes } from './routes/trash.js';
 
 export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
@@ -25,6 +28,14 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   const { db, openReadOnly } = openDatabase(config.dataDir);
   const progress = new Progress();
   const matcher = new Matcher(db, app.log);
+  const quarantine = new Quarantine(db, app.log);
+  try {
+    await reconcile(db, quarantine);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  quarantine.start();
   const media = new MediaWork();
   const scanner = new Scanner(
     db,
@@ -38,6 +49,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
     media.shutdown.abort();
     await scanner.close();
     await matcher.close();
+    await quarantine.close();
   });
   app.addHook('onClose', async () => {
     db.close();
@@ -48,6 +60,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   groupRoutes(app, db, matcher);
   exportRoutes(app, openReadOnly);
   thumbnailRoutes(app, db, config.dataDir, media);
+  trashRoutes(app, db, quarantine);
   app.get('/api/health', async (): Promise<HealthResponse> => {
     db.prepare('SELECT 1').get();
     return { status: 'ok', db: 'ok' };
