@@ -19,7 +19,7 @@ it('migrates once, applies writer pragmas and persists settings across reopen', 
   expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
   expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
   expect(db.pragma('synchronous', { simple: true })).toBe(1);
-  expect(db.pragma('user_version', { simple: true })).toBe(2);
+  expect(db.pragma('user_version', { simple: true })).toBe(3);
   db.prepare('INSERT INTO settings VALUES (?, ?)').run('example', 'durable');
   db.close();
   const reopened = openDatabase(directory).db;
@@ -36,7 +36,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
     INSERT INTO settings VALUES ('retained', 'yes'); PRAGMA user_version=1`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(2);
+  expect(db.pragma('user_version', { simple: true })).toBe(3);
   expect(db.prepare('SELECT value FROM settings').get()).toEqual({ value: 'yes' });
   expect(
     db
@@ -71,7 +71,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
   ).toThrow(/FOREIGN KEY/);
   db.close();
   const reopened = openDatabase(directory).db;
-  expect(reopened.pragma('user_version', { simple: true })).toBe(2);
+  expect(reopened.pragma('user_version', { simple: true })).toBe(3);
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 1 });
   reopened.exec('DELETE FROM scan_dirs WHERE id=1');
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 0 });

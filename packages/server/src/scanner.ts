@@ -6,7 +6,13 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
 import { processFile } from './hashing.js';
 
-type Directory = { id: number; path: string; follow_symlinks: number; cross_filesystems: number };
+type Directory = {
+  id: number;
+  path: string;
+  token: string;
+  follow_symlinks: number;
+  cross_filesystems: number;
+};
 const images = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'tiff', 'avif']);
 const videos = new Set([
   'mp4',
@@ -35,7 +41,8 @@ export class Scanner {
   private currentFile?: string;
   constructor(
     private db: Database.Database,
-    private log: FastifyBaseLogger
+    private log: FastifyBaseLogger,
+    private onProgress?: (snapshot: ScanProgress) => void
   ) {
     db.transaction(() => {
       db.exec(
@@ -50,12 +57,18 @@ export class Scanner {
       .get() as ScanProgress | undefined;
     return row ? { ...row, ...(this.currentFile ? { current_file: this.currentFile } : {}) } : null;
   }
+  private publish() {
+    if (!this.onProgress) return;
+    const snapshot = this.current();
+    if (snapshot) this.onProgress(snapshot);
+  }
   start(): number | null {
     if (this.task) return null;
     const id = Number(
       this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
     );
     this.cancelled = false;
+    this.publish();
     this.task = this.run(id).finally(() => {
       this.task = undefined;
     });
@@ -77,6 +90,13 @@ export class Scanner {
     scan: number,
     error: string | null
   ) {
+    // A directory may be unregistered while traversal awaits filesystem I/O.
+    if (
+      !this.db
+        .prepare('SELECT id FROM scan_dirs WHERE id=? AND path=? AND token=?')
+        .get(dir.id, dir.path, dir.token)
+    )
+      return;
     this.db.transaction(() => {
       const previous = this.db
         .prepare('SELECT size,mtime_ns,status FROM files WHERE scan_dir_id=? AND rel_path=?')
@@ -108,6 +128,7 @@ export class Scanner {
         )
         .run(Number(unchanged || !!error), Number(!!error), scan);
     })();
+    this.publish();
   }
   private async walk(
     dir: Directory,
@@ -199,6 +220,7 @@ export class Scanner {
           batch.map(async (file) => {
             const path = join(file.path, file.rel_path);
             this.currentFile = path;
+            this.publish();
             let error: string | null = null;
             try {
               const sha = await processFile(path);
@@ -216,6 +238,7 @@ export class Scanner {
                 .prepare('UPDATE scans SET processed=processed+1,errors=errors+? WHERE id=?')
                 .run(Number(!!error), id);
             })();
+            this.publish();
             if (error) {
               this.log.warn({ scan_id: id, file_id: file.id, error }, 'File processing failed');
             }
@@ -232,6 +255,7 @@ export class Scanner {
     this.db
       .prepare("UPDATE scans SET status=?,finished_at=datetime('now') WHERE id=?")
       .run(status, id);
+    this.publish();
     this.log.info({ scan_id: id, status }, 'Scan finished');
   }
 }

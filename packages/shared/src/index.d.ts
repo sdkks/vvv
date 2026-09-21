@@ -26,3 +26,36 @@ export interface StartScanResponse {
   id: number;
 }
 export type CurrentScanResponse = ScanProgress | null;
+export interface ScanDir {
+  id: number;
+  path: string;
+  follow_symlinks: boolean;
+  cross_filesystems: boolean;
+  file_count: number;
+}
+export interface UpdateScanDirRequest {
+  follow_symlinks?: boolean;
+  cross_filesystems?: boolean;
+}
+export interface CreateScanDirRequest extends UpdateScanDirRequest {
+  path: string;
+}
+export interface ScanDirsResponse {
+  items: ScanDir[];
+}
+export type CreateScanDirResponse = ScanDir;
+export type UpdateScanDirResponse = ScanDir;
+export type DeleteScanDirResponse = void;
+export interface ScanProgressEvent {
+  event: 'progress';
+  data: ScanProgress;
+}
+export interface ScanError {
+  file_id: number;
+  path: string;
+  error: string;
+}
+export interface ScanErrorsResponse {
+  items: ScanError[];
+  next_cursor: string | null;
+}

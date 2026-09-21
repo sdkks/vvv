@@ -24,8 +24,8 @@ make ci        # typecheck + lint + build + test + secret scan
 
 Set `VVV_PASSWORD` in your shell, then run `pnpm dev`. Open the Vite URL
 (normally http://localhost:5173); its `/api` proxy connects to port 8080.
-Only login and an authenticated empty Home screen are implemented so far.
-The server does not yet serve the built SPA.
+The browser currently has login and an authenticated empty Home screen;
+scanning is available through the API below. The server does not yet serve the built SPA.
 
 - `packages/server`: Fastify API, signed-cookie auth, SQLite bootstrap.
 - `packages/web`: React SPA, Vite development server and production build.
@@ -59,6 +59,38 @@ restarts. Session cookies contain only an authentication marker and timestamp,
 not the password. Without a stable session secret, users sign in again after a
 restart and return to their previous browser location. No telemetry or external
 runtime services are used. `GET /api/health` is public and checks the database.
+
+## Scan API
+
+All scan routes require the session cookie obtained from `POST /api/auth/login`.
+Paths refer to directories visible to the server (container paths when containerized).
+
+| Method and path                               | Behavior                                                                                                                                                                                                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/scan-dirs`                          | Lists registered directories, traversal options, and indexed `file_count`.                                                                                                                                                                           |
+| `POST /api/scan-dirs`                         | Registers `{ "path": string, "follow_symlinks"?: boolean, "cross_filesystems"?: boolean }`. Options default to false; paths are normalized to absolute paths. Returns 201, 400 for invalid directories/input, or 409 for an already-registered path. |
+| `PATCH /api/scan-dirs/:id`                    | Updates either or both boolean traversal options.                                                                                                                                                                                                    |
+| `DELETE /api/scan-dirs/:id`                   | Unregisters the directory and cascades its indexed file rows. Returns 204, or 404 if absent. **Never deletes or moves files on disk**, including `.vvv-trash/` contents.                                                                             |
+| `POST /api/scans`                             | Starts a scan and returns 202 `{ "id": number }`, or 409 while one is running.                                                                                                                                                                       |
+| `GET /api/scans/current`                      | Returns the latest durable scan counters/status (or null), with `current_file` when processing.                                                                                                                                                      |
+| `POST /api/scans/:id/cancel`                  | Requests cooperative cancellation; the next scan skips unchanged completed files.                                                                                                                                                                    |
+| `GET /api/scans/:id/events`                   | Streams `event: progress` with a JSON scan snapshot in `data:`.                                                                                                                                                                                      |
+| `GET /api/scans/:id/errors?cursor=&limit=100` | Returns `{ "items": [{ "file_id", "path", "error" }], "next_cursor": string\|null }`. Pass `next_cursor` unchanged to fetch the next page; null ends pagination.                                                                                     |
+
+Error pages are ordered by file ID (default 100 rows, capped at 500) and include only
+files last seen in that scan that currently have error status. This is not an immutable
+error archive: a later scan or directory removal may change the results.
+
+SSE progress is coalesced to at most one event per 250 ms per scan. The server retains
+at most 500 events in memory and sends `: ping` heartbeat comments every 15 seconds.
+There is **no replay guarantee**: reconnecting clients should fetch `/api/scans/current`
+again; `Last-Event-ID` does not replay history. Slow streams are disconnected rather
+than buffered indefinitely. Reverse proxies may need streaming/buffering configuration;
+the server sends `X-Accel-Buffering: no`, but cannot guarantee proxy behavior.
+
+Unregistering a directory discards its catalog metadata; restore or purge any trash you
+want managed before unregistering it when trash management is available. Unregistering
+is not a filesystem cleanup operation.
 
 Commits must follow [Conventional Commits](https://www.conventionalcommits.org/)
 (enforced by commitlint via a `commit-msg` hook). The `pre-commit` hook runs

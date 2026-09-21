@@ -110,7 +110,7 @@ it('validates cancel ids, rejects missing scans, and keeps terminal cancellation
   expect((await current()).json().status).toBe('done');
 });
 
-it('recovers running scans before accepting requests and does not expose deferred endpoints', async () => {
+it('recovers running scans before accepting requests', async () => {
   await app.close();
   const { db } = openDatabase(directory);
   db.exec("INSERT INTO scans(status) VALUES ('running')");
@@ -123,6 +123,4 @@ it('recovers running scans before accepting requests and does not expose deferre
     processed: 0,
     errors: 0,
   });
-  for (const url of ['/api/scan-dirs', '/api/scans/1/events', '/api/scans/1/errors'])
-    expect((await app.inject({ url, headers: { cookie } })).statusCode).toBe(404);
 });

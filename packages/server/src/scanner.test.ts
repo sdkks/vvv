@@ -371,6 +371,39 @@ it('bounds hashing to four workers and cancels between files, preserving pending
   expect(hash).toHaveBeenCalledTimes(5);
 });
 
+it('does not record stale files when a directory is deleted and its id is reused for the same path', async () => {
+  seed();
+  const oldFile = await put('old.jpg');
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const walking = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  vi.mocked(fs.lstat).mockImplementation(async (path, options) => {
+    if (String(path) === oldFile) {
+      reached();
+      await blocked;
+    }
+    return realFs.lstat(path, options);
+  });
+  scanner.start();
+  try {
+    await walking;
+    db.exec('DELETE FROM scan_dirs WHERE id=1');
+    expect(Number(seed(media).lastInsertRowid)).toBe(1);
+  } finally {
+    release();
+  }
+  await finished();
+  expect(files()).toEqual([]);
+  expect(hash).not.toHaveBeenCalled();
+  await scan();
+  expect(files()).toEqual([expect.objectContaining({ rel_path: 'old.jpg', status: 'done' })]);
+});
+
 it('cancels traversal before the missing sweep and drains cleanly on close', async () => {
   seed();
   await put('keep.jpg');
