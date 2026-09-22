@@ -69,6 +69,8 @@ it.each([
   ['video_phash_threshold', 0, 64],
   ['video_frame_count', 1, 64],
   ['video_timeout_ms', 10000, 3600000],
+  ['min_file_size_mb', 0, Number.MAX_SAFE_INTEGER],
+  ['max_file_size_mb', 0, Number.MAX_SAFE_INTEGER],
 ] as const)('validates %s strictly and atomically with field detail', async (key, min, max) => {
   for (const value of [min - 1, max + 1, min + 0.5, String(min), null, true, [], {}]) {
     const before = (await get()).json();
@@ -81,6 +83,45 @@ it.each([
     expect((await get()).json()).toEqual(before);
   }
   for (const value of [min, max]) expect((await patch({ [key]: value })).statusCode).toBe(200);
+});
+it('validates merged size ranges atomically and persists explicit disabling with consequences', async () => {
+  const video = file('video', 'excluded');
+  const before = catalog();
+  expect(
+    (await patch({ min_file_size_mb: 1, max_file_size_mb: 2 })).json<UpdateSettingsResponse>()
+  ).toMatchObject({
+    matching: { min_file_size_mb: 1, max_file_size_mb: 2 },
+    consequences: [{ type: 'next_scan_required', reason: 'size_filter_change' }],
+  });
+  for (const payload of [{ min_file_size_mb: 3 }, { min_file_size_mb: 2, max_file_size_mb: 1 }]) {
+    const response = await patch({ ...payload, retention_days: 12 });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: 'invalid_settings',
+      fields: {
+        max_file_size_mb: 'Maximum must be at least minimum when both are enabled.',
+      },
+    });
+    expect((await get()).json()).toMatchObject({
+      retention_days: 30,
+      matching: { min_file_size_mb: 1, max_file_size_mb: 2 },
+    });
+  }
+  expect(
+    (await patch({ max_file_size_mb: 2 })).json<UpdateSettingsResponse>().consequences
+  ).toEqual([]);
+  db.exec("INSERT INTO scans(status) VALUES ('running')");
+  expect((await patch({ max_file_size_mb: 0 })).statusCode).toBe(200);
+  expect((await patch({ min_file_size_mb: 0 })).statusCode).toBe(200);
+  expect(catalog()).toEqual(before);
+  await app.close();
+  app = await createServer({ ...config, dataDir: root }, false);
+  expect((await get()).json()).toMatchObject({
+    matching: { min_file_size_mb: 0, max_file_size_mb: 0 },
+  });
+  expect(db.prepare('SELECT status FROM files WHERE id=?').get(video)).toEqual({
+    status: 'excluded',
+  });
 });
 it('persists mixed updates and invalidation together across a database reopen, leaving images and SHA intact', async () => {
   const video = file('video');

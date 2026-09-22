@@ -42,6 +42,8 @@ const matching: Settings['matching'] = {
   ],
   video_frame_count: 9,
   video_timeout_ms: 600000,
+  min_file_size_mb: 0,
+  max_file_size_mb: 0,
 };
 const defaults = { retention_days: 30, auto_purge_enabled: false, matching };
 beforeEach(async () => {
@@ -111,6 +113,8 @@ it('reports independently seeded effective values, including a zero threshold', 
     })),
     video_frame_count: 3,
     video_timeout_ms: 90000,
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
   });
   db.prepare("DELETE FROM settings WHERE key='image_phash_threshold'").run();
   expect((await get()).json<Settings>().matching.methods[1]?.threshold).toBe(6);

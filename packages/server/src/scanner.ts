@@ -3,16 +3,18 @@ import { join } from 'node:path';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
-import type { ScanProgress } from '@vvv/shared';
+import type { FileSizePolicy, ScanProgress } from '@vvv/shared';
 import { imageHash, processFile, storeHashes } from './hashing.js';
 import { MediaWork, videoHash } from './video.js';
-import { matchingSetting } from './matching-settings.js';
+import { fileSizeSettings, matchingSetting } from './matching-settings.js';
+import { refreshFileGroups } from './matcher.js';
 import {
   crossesBoundary,
   insideTrash,
   mediaKind,
   outsideRoot,
   skipsSymlink,
+  sizeExclusion,
 } from './traversal-policy.js';
 
 type Directory = {
@@ -34,6 +36,7 @@ export class Scanner {
   private abort = new AbortController();
   private task?: Promise<void>;
   private currentFile?: string;
+  private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
@@ -62,6 +65,8 @@ export class Scanner {
   }
   start(): number | null {
     if (this.task) return null;
+    // Saving new limits never changes eligibility partway through a running scan.
+    this.sizes = fileSizeSettings(this.db);
     const id = Number(
       this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
     );
@@ -123,29 +128,34 @@ export class Scanner {
         .safeIntegers()
         .get(dir.id, path) as { size: bigint; mtime_ns: bigint; status: string } | undefined;
       const unchanged = previous?.size === size && previous.mtime_ns === mtime;
-      const completed = unchanged && previous.status === 'done';
+      const exclusion = error ? null : sizeExclusion(size, this.sizes);
+      const completed = !exclusion && unchanged && previous.status === 'done';
       const status = error
         ? 'error'
-        : completed
-          ? 'done'
-          : unchanged && previous.status === 'hashed'
-            ? 'hashed'
-            : 'pending';
-      this.db
+        : exclusion
+          ? 'excluded'
+          : completed
+            ? 'done'
+            : unchanged && previous.status === 'hashed'
+              ? 'hashed'
+              : 'pending';
+      const recorded = this.db
         .prepare(
           `INSERT INTO files(scan_dir_id,rel_path,kind,size,mtime_ns,status,last_seen_scan_id,error)
         VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(scan_dir_id,rel_path) DO UPDATE SET
         size=excluded.size,mtime_ns=excluded.mtime_ns,status=excluded.status,error=excluded.error,
         sha256=CASE WHEN files.size=excluded.size AND files.mtime_ns=excluded.mtime_ns
           THEN files.sha256 ELSE NULL END,
-        last_seen_scan_id=excluded.last_seen_scan_id,updated_at=datetime('now')`
+        last_seen_scan_id=excluded.last_seen_scan_id,updated_at=datetime('now') RETURNING id`
         )
-        .run(dir.id, path, kind, size, mtime, status, scan, error);
+        .get(dir.id, path, kind, size, mtime, status, scan, error ?? exclusion) as { id: number };
+      if (exclusion) refreshFileGroups(this.db, recorded.id);
       this.db
         .prepare(
           'UPDATE scans SET discovered=discovered+1,processed=processed+?,errors=errors+? WHERE id=?'
         )
-        .run(Number(completed || !!error), Number(!!error), scan);
+        // Processed includes traversal exclusions; they never increment the error count.
+        .run(Number(completed || !!error || !!exclusion), Number(!!error), scan);
     })();
     this.publish();
   }
@@ -280,14 +290,10 @@ export class Scanner {
                     const image = await imageHash(path);
                     result = { ...image, hashes: [image.hash] };
                   } else
-                    result = await videoHash(
-                      path,
-                      matchingSetting(this.db, 'video_frame_count'),
-                      {
-                        timeout: matchingSetting(this.db, 'video_timeout_ms'),
-                        signal: this.abort.signal,
-                      }
-                    );
+                    result = await videoHash(path, matchingSetting(this.db, 'video_frame_count'), {
+                      timeout: matchingSetting(this.db, 'video_timeout_ms'),
+                      signal: this.abort.signal,
+                    });
                 } catch (cause) {
                   if (this.abort.signal.aborted) return;
                   error = message(cause);

@@ -36,6 +36,7 @@ it('labels every scan decision in ordinary language', () => {
   expect(decisionLabel).toEqual({
     folder: 'Folder — open to explore',
     would_process: 'Would be processed',
+    excluded_by_size: 'Excluded by size',
     unsupported_type: 'Not a supported media type',
     symlink_not_followed: 'Symlink not followed',
     filesystem_boundary: 'Across a filesystem boundary',
@@ -103,7 +104,8 @@ it('renders safe metadata, keyboard folder controls, table semantics, and the ac
   expect(html).toContain('reads directory metadata only');
   expect(html).toContain('not followed');
   expect(html).toContain('not crossed');
-  expect(html).toContain('No size');
+  expect(html).toContain('Saved size policy applies');
+  expect(html).not.toContain('No size filter');
   expect(html).toContain('Trash is excluded');
   expect(html).toContain('aria-label="Preview breadcrumb"');
   expect(html).toContain('<button aria-current="location">Root</button>');
@@ -116,6 +118,26 @@ it('renders safe metadata, keyboard folder controls, table semantics, and the ac
   expect(html).toContain('Symlink not followed');
   expect(html).toContain('<button>Next</button>');
   expect(html).toContain('Close preview');
+});
+it('renders the size exclusion reason and configured range without offering folder navigation', () => {
+  const detail = '512 KiB below minimum 1 MiB. Configured range: minimum 1 MiB, maximum disabled.';
+  const html = render({
+    path: '',
+    has_more: false,
+    next_cursor: null,
+    items: [
+      {
+        name: 'small.jpg',
+        type: 'file',
+        kind: 'image',
+        size: 524288,
+        decision: 'excluded_by_size',
+        decision_detail: detail,
+      },
+    ],
+  });
+  expect(html).toContain(`Excluded by size: ${detail}`);
+  expect(html).not.toContain('<button>small.jpg</button>');
 });
 it('distinguishes an empty media filter from a whole-directory count', () => {
   const html = render({ path: '', has_more: false, next_cursor: null, items: [] });

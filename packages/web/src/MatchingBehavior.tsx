@@ -1,4 +1,5 @@
 import type { MatchingSettings } from '@vvv/shared';
+import { sizePolicyLabel } from './matching-controls';
 
 function ValueBadge({ current, fallback }: { current: number | null; fallback: number | null }) {
   return <span className="matching-badge">{current === fallback ? 'Default' : 'Current'}</span>;
@@ -52,6 +53,7 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
           </div>
         ))}
       </dl>
+      <p>Size filter: {sizePolicyLabel(matching)}. Applies to the next scan.</p>
       <p className="matching-notice">
         Thresholds apply at match time, on the next match run. Existing groups reflect the last
         completed match run. Frame count and sampling timeout apply when videos are sampled.

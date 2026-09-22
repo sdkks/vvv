@@ -4,6 +4,7 @@ import type { MatchingSettings, SettingsConsequence } from '@vvv/shared';
 import { runMatching, SettingsValidationError, updateSettings } from './api';
 import {
   consequenceMessages,
+  isSizeField,
   matchingDraft,
   matchingErrors,
   matchingFields,
@@ -55,6 +56,10 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
         re-sampled on the next scan; re-match afterwards. Timeout changes affect only future or
         retried sampling, not completed work.
       </p>
+      <p id="size-policy-help">
+        Size limits are inclusive. Leave a size input empty to disable that bound (saved as 0).
+        {consequenceMessages.next_scan_required}
+      </p>
       <form
         noValidate
         aria-label="Advanced matching controls"
@@ -70,7 +75,8 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
         {matchingFields.map(({ key, label, min, max }) => (
           <div className="matching-field" key={key}>
             <label htmlFor={key}>
-              {label} ({min}–{max})
+              {label}
+              {!isSizeField(key) && ` (${min}–${max})`}
             </label>
             <input
               id={key}
@@ -78,16 +84,22 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
               min={min}
               max={max}
               step={key === 'video_timeout_ms' ? '0.001' : '1'}
-              required
+              required={!isSizeField(key)}
+              placeholder={isSizeField(key) ? 'Disabled' : undefined}
               value={values[key]}
               disabled={save.isPending || rematch.isPending}
               aria-invalid={!!fieldErrors[key]}
-              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+              aria-describedby={
+                [isSizeField(key) ? 'size-policy-help' : '', fieldErrors[key] ? `${key}-error` : '']
+                  .filter(Boolean)
+                  .join(' ') || undefined
+              }
               onChange={(event) => {
                 setDraft({ ...values, [key]: event.target.value });
                 save.reset();
               }}
             />
+            {isSizeField(key) && Number(values[key]) === 0 && <span>Disabled</span>}
             {fieldErrors[key] && (
               <p id={`${key}-error`} role="alert">
                 {fieldErrors[key]}
@@ -122,7 +134,9 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
         {rematch.isSuccess && <p>Re-match started. New results appear only when it completes.</p>}
       </div>
       {consequences.some((c) => c.type === 'rematch_required') &&
-        !consequences.some((c) => c.type === 'rescan_required') && (
+        !consequences.some(
+          (c) => c.type === 'rescan_required' || c.type === 'next_scan_required'
+        ) && (
           <button disabled={save.isPending || rematch.isPending} onClick={() => rematch.mutate()}>
             {rematch.isPending ? 'Starting re-match…' : 'Re-match now'}
           </button>

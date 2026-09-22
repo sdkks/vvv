@@ -1,11 +1,13 @@
 import type Database from 'better-sqlite3';
-import type { MatchingSettings } from '@vvv/shared';
+import type { FileSizePolicy, MatchingSettings } from '@vvv/shared';
 
 const defaults = {
   image_phash_threshold: { value: 6, min: 0, max: 64 },
   video_phash_threshold: { value: 10, min: 0, max: 64 },
   video_frame_count: { value: 9, min: 1, max: 64 },
   video_timeout_ms: { value: 600000, min: 1, max: 2147483647 },
+  min_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
+  max_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
 };
 
 export function numericSetting(
@@ -27,8 +29,22 @@ export function matchingSetting(db: Database.Database, key: keyof typeof default
   return numericSetting(db, key, value, max, min);
 }
 
+export function validSizeRange({ min_file_size_mb: min, max_file_size_mb: max }: FileSizePolicy) {
+  return min === 0 || max === 0 || max >= min;
+}
+
+export function fileSizeSettings(db: Database.Database): FileSizePolicy {
+  const policy = {
+    min_file_size_mb: matchingSetting(db, 'min_file_size_mb'),
+    max_file_size_mb: matchingSetting(db, 'max_file_size_mb'),
+  };
+  if (!validSizeRange(policy)) throw new Error('Invalid file size range');
+  return policy;
+}
+
 export function matchingSettings(db: Database.Database): MatchingSettings {
   return {
+    ...fileSizeSettings(db),
     methods: [
       {
         id: 'exact',

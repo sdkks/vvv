@@ -6,6 +6,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AdvancedMatching } from './AdvancedMatching';
 import {
   consequenceMessages,
+  isSizeField,
+  sizePolicyLabel,
   matchingDraft,
   matchingErrors,
   matchingFields,
@@ -24,12 +26,14 @@ const draft: MatchingDraft = {
   video_phash_threshold: '10',
   video_frame_count: '9',
   video_timeout_ms: '600',
+  min_file_size_mb: '',
+  max_file_size_mb: '',
 };
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.mocked(React.useState).mockReset();
 });
-it.each(matchingFields.filter(({ key }) => key !== 'video_timeout_ms'))(
+it.each(matchingFields.filter(({ key }) => key !== 'video_timeout_ms' && !isSizeField(key)))(
   'validates integer bounds and empty drafts for $key',
   ({ key, min, max }) => {
     for (const value of ['', ' ', 'bad', String(min - 1), String(max + 1), String(min + 0.5)])
@@ -75,19 +79,64 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     ],
     video_frame_count: 1,
     video_timeout_ms: 90000,
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
   });
   expect(result).toEqual({
     image_phash_threshold: '0',
     video_phash_threshold: '64',
     video_frame_count: '1',
     video_timeout_ms: '90',
+    min_file_size_mb: '',
+    max_file_size_mb: '',
   });
   expect(matchingPayload(result)).toEqual({
     image_phash_threshold: 0,
     video_phash_threshold: 64,
     video_frame_count: 1,
     video_timeout_ms: 90000,
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
   });
+});
+it.each(['min_file_size_mb', 'max_file_size_mb'] as const)(
+  'validates optional integer size field %s',
+  (key) => {
+    for (const value of ['-1', '0.1', 'bad', 'Infinity', String(Number.MAX_SAFE_INTEGER + 1)])
+      expect(matchingErrors({ ...draft, [key]: value })[key]).toBeTruthy();
+    for (const value of ['', ' ', '0', '1', String(Number.MAX_SAFE_INTEGER)])
+      expect(matchingErrors({ ...draft, [key]: value })).toEqual({});
+  }
+);
+it('validates ranges and sends explicit zero when a saved size bound is cleared', () => {
+  const saved = matchingDraft({ ...matching, min_file_size_mb: 1, max_file_size_mb: 100 });
+  expect(saved).toMatchObject({ min_file_size_mb: '1', max_file_size_mb: '100' });
+  expect(matchingErrors({ ...saved, max_file_size_mb: '0' })).toEqual({});
+  expect(matchingErrors({ ...saved, min_file_size_mb: '101' })).toEqual({
+    max_file_size_mb: 'Maximum must be at least minimum when both are enabled.',
+  });
+  expect(matchingPayload({ ...saved, min_file_size_mb: '', max_file_size_mb: '' })).toMatchObject({
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
+  });
+  expect(sizePolicyLabel({ min_file_size_mb: 1, max_file_size_mb: 0 })).toBe('at least 1 MiB');
+  expect(sizePolicyLabel({ min_file_size_mb: 0, max_file_size_mb: 100 })).toBe('at most 100 MiB');
+});
+it('renders optional size inputs as Disabled with next-scan consequences and suppresses premature rematch', () => {
+  const html = renderConsequences([
+    { type: 'next_scan_required', reason: 'size_filter_change' },
+    { type: 'rematch_required', reason: 'threshold_change' },
+  ]);
+  for (const key of ['min_file_size_mb', 'max_file_size_mb']) {
+    expect(html).toContain(`for="${key}"`);
+    const input = html.match(new RegExp(`<input id="${key}"[^>]*>`))?.[0];
+    expect(input).toContain('placeholder="Disabled"');
+    expect(input).toContain('value=""');
+    expect(input).toContain('aria-describedby="size-policy-help"');
+    expect(input).not.toContain('required');
+  }
+  expect(html).toContain(consequenceMessages.next_scan_required);
+  expect(html).not.toContain('Re-match now');
 });
 it('preserves server field details for inline errors', async () => {
   vi.stubGlobal(
@@ -126,6 +175,8 @@ const matching: MatchingSettings = {
   ],
   video_frame_count: 9,
   video_timeout_ms: 10001,
+  min_file_size_mb: 0,
+  max_file_size_mb: 0,
 };
 function renderConsequences(consequences: SettingsConsequence[]) {
   vi.mocked(React.useState)

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { matchingSetting, numericSetting } from './matching-settings.js';
+import { fileSizeSettings, matchingSetting, numericSetting } from './matching-settings.js';
 import { mediaSetting } from './video.js';
 
 let db: Database.Database;
@@ -15,6 +15,8 @@ it.each([
   ['video_phash_threshold', 10, 0, 64],
   ['video_frame_count', 9, 1, 64],
   ['video_timeout_ms', 600000, 1, 2147483647],
+  ['min_file_size_mb', 0, 0, Number.MAX_SAFE_INTEGER],
+  ['max_file_size_mb', 0, 0, Number.MAX_SAFE_INTEGER],
 ] as const)('preserves defaults and validation for %s', (key, fallback, min, max) => {
   expect(matchingSetting(db, key)).toBe(fallback);
   const put = db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)');
@@ -26,6 +28,13 @@ it.each([
     put.run(key, String(value));
     expect(() => matchingSetting(db, key)).toThrow(`Invalid ${key}`);
   }
+});
+it('reads absent size limits as disabled and rejects invalid persisted ranges', () => {
+  expect(fileSizeSettings(db)).toEqual({ min_file_size_mb: 0, max_file_size_mb: 0 });
+  db.exec("INSERT INTO settings VALUES ('min_file_size_mb','2'),('max_file_size_mb','1')");
+  expect(() => fileSizeSettings(db)).toThrow('Invalid file size range');
+  db.exec("UPDATE settings SET value='0' WHERE key='max_file_size_mb'");
+  expect(fileSizeSettings(db)).toEqual({ min_file_size_mb: 2, max_file_size_mb: 0 });
 });
 it('preserves the separate thumbnail fallback and nonnegative bucket cap', () => {
   expect(mediaSetting(db, 'video_timeout_ms', 120000, 2147483647)).toBe(120000);

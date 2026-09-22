@@ -3,6 +3,7 @@ import type { ScanDecision } from '@vvv/shared';
 export const decisionLabel: Record<ScanDecision, string> = {
   folder: 'Folder — open to explore',
   would_process: 'Would be processed',
+  excluded_by_size: 'Excluded by size',
   unsupported_type: 'Not a supported media type',
   symlink_not_followed: 'Symlink not followed',
   filesystem_boundary: 'Across a filesystem boundary',

@@ -48,6 +48,7 @@ export interface ScanDirsResponse {
 export type ScanDecision =
   | 'folder'
   | 'would_process'
+  | 'excluded_by_size'
   | 'unsupported_type'
   | 'symlink_not_followed'
   | 'filesystem_boundary'
@@ -129,7 +130,12 @@ export type MatchingMethod = {
   scope: string;
   enabled: true;
 } & ({ id: 'exact'; threshold: null } | { id: 'image_dhash' | 'video_dhash'; threshold: number });
-export interface MatchingSettings {
+export interface FileSizePolicy {
+  /** Inclusive MiB limits; zero disables that bound. */
+  min_file_size_mb: number;
+  max_file_size_mb: number;
+}
+export interface MatchingSettings extends FileSizePolicy {
   methods: MatchingMethod[];
   video_frame_count: number;
   video_timeout_ms: number;
@@ -141,7 +147,7 @@ export interface RetentionSettings {
 export interface Settings extends RetentionSettings {
   matching: MatchingSettings;
 }
-export interface MatchingControls {
+export interface MatchingControls extends FileSizePolicy {
   image_phash_threshold: number;
   video_phash_threshold: number;
   video_frame_count: number;
@@ -151,7 +157,8 @@ export type UpdateSettingsRequest = Partial<RetentionSettings & MatchingControls
 export type SettingsConsequence =
   | { type: 'rematch_required'; reason: 'threshold_change' }
   | { type: 'rescan_required'; reason: 'frame_count_change' }
-  | { type: 'future_sampling_only'; reason: 'timeout_change' };
+  | { type: 'future_sampling_only'; reason: 'timeout_change' }
+  | { type: 'next_scan_required'; reason: 'size_filter_change' };
 export interface UpdateSettingsResponse extends Settings {
   consequences: SettingsConsequence[];
 }

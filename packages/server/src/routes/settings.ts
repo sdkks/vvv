@@ -8,7 +8,7 @@ import type {
   UpdateSettingsResponse,
 } from '@vvv/shared';
 import { retention } from '../quarantine.js';
-import { matchingSetting, matchingSettings } from '../matching-settings.js';
+import { matchingSetting, matchingSettings, validSizeRange } from '../matching-settings.js';
 
 export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
   const read = (): Settings => {
@@ -32,6 +32,8 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
             video_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
             video_frame_count: { type: 'integer', minimum: 1, maximum: 64 },
             video_timeout_ms: { type: 'integer', minimum: 10000, maximum: 3600000 },
+            min_file_size_mb: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+            max_file_size_mb: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
           },
         },
       },
@@ -47,11 +49,23 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
         return reply.code(400).send({ error: 'invalid_settings', fields });
       }
       return db.transaction(() => {
+        const sizePolicy = {
+          min_file_size_mb:
+            request.body.min_file_size_mb ?? matchingSetting(db, 'min_file_size_mb'),
+          max_file_size_mb:
+            request.body.max_file_size_mb ?? matchingSetting(db, 'max_file_size_mb'),
+        };
+        if (!validSizeRange(sizePolicy))
+          return reply.code(400).send({
+            error: 'invalid_settings',
+            fields: { max_file_size_mb: 'Maximum must be at least minimum when both are enabled.' },
+          });
         const changed = (key: keyof MatchingControls) =>
           request.body[key] !== undefined && request.body[key] !== matchingSetting(db, key);
         const thresholds = changed('image_phash_threshold') || changed('video_phash_threshold');
         const frames = changed('video_frame_count');
         const timeout = changed('video_timeout_ms');
+        const sizes = changed('min_file_size_mb') || changed('max_file_size_mb');
         // Do not let an in-flight sampler restore old frames or a matcher mix settings.
         if (frames && db.prepare("SELECT 1 FROM scans WHERE status='running' LIMIT 1").get())
           return reply.code(409).send({ error: 'settings_scan_running' });
@@ -74,6 +88,7 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
         if (thresholds) consequences.push({ type: 'rematch_required', reason: 'threshold_change' });
         if (frames) consequences.push({ type: 'rescan_required', reason: 'frame_count_change' });
         if (timeout) consequences.push({ type: 'future_sampling_only', reason: 'timeout_change' });
+        if (sizes) consequences.push({ type: 'next_scan_required', reason: 'size_filter_change' });
         return { ...read(), consequences } satisfies UpdateSettingsResponse;
       })();
     }

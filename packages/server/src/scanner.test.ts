@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { Scanner } from './scanner.js';
+import { Matcher } from './matcher.js';
 import { Quarantine } from './quarantine.js';
 import { settingsRoutes } from './routes/settings.js';
 import * as hashing from './hashing.js';
@@ -336,6 +337,7 @@ it('skips and logs replacement files at quarantined paths without corrupting tra
   const moved = await quarantine.change('quarantine', 1);
   const before = db.prepare('SELECT * FROM files').get();
   await put('original.jpg', 'replacement with a different size');
+  setSizes(1);
   hash.mockClear();
   const info = vi.spyOn(log, 'info');
   try {
@@ -369,6 +371,7 @@ it('does not rediscover or sweep paths with an unsettled filesystem intent', asy
   ).run(media + '/');
   await unlink(join(media, 'moved.jpg'));
   await put('present.jpg', 'changed');
+  setSizes(1);
   hash.mockClear();
   await scan();
   expect(hash).not.toHaveBeenCalled();
@@ -767,6 +770,151 @@ it('re-samples after a frame-count PATCH without repeating SHA and uses the save
   } finally {
     await route.close();
   }
+});
+
+const setSizes = (min: number, max = 0) => {
+  db.prepare("UPDATE settings SET value=? WHERE key='min_file_size_mb'").run(String(min));
+  db.prepare("UPDATE settings SET value=? WHERE key='max_file_size_mb'").run(String(max));
+};
+it('records inclusive size exclusions without hashing or errors and fully processes them on widening', async () => {
+  seed();
+  const mib = 1048576;
+  for (const [path, size] of [
+    ['small.jpg', mib - 1],
+    ['min.jpg', mib],
+    ['max.mp4', 2 * mib],
+    ['large.mp4', 2 * mib + 1],
+  ] as const)
+    await writeFile(join(media, path), Buffer.alloc(size));
+  setSizes(1, 2);
+  await scan();
+  expect(scanner.current()).toMatchObject({ discovered: 4, processed: 4, errors: 0 });
+  expect(hash.mock.calls.map(([path]) => basename(path)).sort()).toEqual(['max.mp4', 'min.jpg']);
+  for (const [path, reason] of [
+    ['small.jpg', 'below minimum'],
+    ['large.mp4', 'above maximum'],
+  ] as const)
+    expect(files()).toContainEqual(
+      expect.objectContaining({
+        rel_path: path,
+        status: 'excluded',
+        sha256: null,
+        error: expect.stringContaining(reason),
+      })
+    );
+  expect(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM phashes p JOIN files f ON f.id=p.file_id WHERE f.status='excluded'"
+      )
+      .get()
+  ).toEqual({ n: 0 });
+  const ids = db.prepare('SELECT id,rel_path FROM files ORDER BY id').all();
+  hash.mockClear();
+  hash.mockImplementation(async (path) => {
+    expect(
+      db.prepare('SELECT status,error FROM files WHERE rel_path=?').get(basename(path))
+    ).toEqual({ status: 'pending', error: null });
+    return realHashing.processFile(path);
+  });
+  setSizes(0);
+  await scan();
+  expect(hash.mock.calls.map(([path]) => basename(path)).sort()).toEqual([
+    'large.mp4',
+    'small.jpg',
+  ]);
+  expect(files().every((file) => (file as { status: string }).status === 'done')).toBe(true);
+  expect(db.prepare('SELECT id,rel_path FROM files ORDER BY id').all()).toEqual(ids);
+});
+it('tightens done rows, retains checkpoints across reopen, and reuses SHA when widened', async () => {
+  seed();
+  await put('keep.jpg');
+  await scan();
+  const sha = db.prepare('SELECT sha256 FROM files').get();
+  const hashes = db.prepare('SELECT * FROM phashes').all();
+  setSizes(1);
+  hash.mockClear();
+  vi.mocked(hashing.imageHash).mockClear();
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(hashing.imageHash).not.toHaveBeenCalled();
+  expect(files()).toEqual([
+    expect.objectContaining({
+      status: 'excluded',
+      error: 'excluded_by_size: 8 B below minimum 1 MiB',
+    }),
+  ]);
+  expect(db.prepare('SELECT sha256 FROM files').get()).toEqual(sha);
+  expect(db.prepare('SELECT * FROM phashes').all()).toEqual(hashes);
+  await scanner.close();
+  db.close();
+  db = openDatabase(directory).db;
+  scanner = new Scanner(db, log);
+  setSizes(0);
+  await scan();
+  expect(hash).not.toHaveBeenCalled();
+  expect(hashing.imageHash).toHaveBeenCalledExactlyOnceWith(join(media, 'keep.jpg'));
+  expect(files()).toEqual([expect.objectContaining({ status: 'done', error: null })]);
+  setSizes(1);
+  await scan();
+  await put('keep.jpg', 'changed while excluded');
+  await scan();
+  expect(db.prepare('SELECT sha256 FROM files').get()).toEqual({ sha256: null });
+  setSizes(0);
+  await scan();
+  expect(hash).toHaveBeenCalledTimes(1);
+});
+it('refreshes published group counts immediately during exclusion, before another match run', async () => {
+  seed();
+  for (const name of ['small-a.jpg', 'small-b.jpg']) await put(name, 'same');
+  for (const name of ['large-a.jpg', 'large-b.jpg'])
+    await writeFile(join(media, name), Buffer.alloc(1048576));
+  await scan();
+  const matcher = new Matcher(db, log);
+  matcher.start();
+  await matcher.close();
+  expect(db.prepare("SELECT count(*) AS n FROM dup_groups WHERE kind='exact'").get()).toEqual({
+    n: 2,
+  });
+  const run = db.prepare("SELECT value FROM settings WHERE key='active_match_run'").get();
+  setSizes(1);
+  await scan();
+  expect(db.prepare("SELECT value FROM settings WHERE key='active_match_run'").get()).toEqual(run);
+  expect(db.prepare("SELECT count(*) AS n FROM dup_groups WHERE kind='exact'").get()).toEqual({
+    n: 1,
+  });
+  for (const group of db
+    .prepare('SELECT member_count,total_bytes,reclaimable_bytes FROM dup_groups')
+    .all())
+    expect(group).toEqual({ member_count: 2, total_bytes: 2097152, reclaimable_bytes: 1048576 });
+  expect(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM dup_group_members m JOIN files f ON f.id=m.file_id WHERE f.status='excluded'"
+      )
+      .get()
+  ).toEqual({ n: 0 });
+});
+it('sweeps excluded files missing on deletion and re-evaluates size policy on rediscovery', async () => {
+  seed();
+  await put('first.jpg');
+  setSizes(1);
+  await scan();
+  await unlink(join(media, 'first.jpg'));
+  await scan();
+  expect(files()).toEqual([expect.objectContaining({ status: 'missing', last_seen_scan_id: 1 })]);
+  await put('first.jpg');
+  // Simulate a settings save while traversal is yielding to filesystem I/O.
+  vi.mocked(fs.lstat).mockImplementation(async (path, options) => {
+    setSizes(0);
+    return realFs.lstat(path, options);
+  });
+  await scan();
+  expect(files()).toEqual([expect.objectContaining({ status: 'excluded', last_seen_scan_id: 3 })]);
+  expect(hash).not.toHaveBeenCalled();
+  await scan();
+  expect(files()).toEqual([expect.objectContaining({ status: 'done', error: null })]);
+  expect(hash).toHaveBeenCalledTimes(1);
 });
 
 it('cancels traversal before the missing sweep and drains cleanly on close', async () => {

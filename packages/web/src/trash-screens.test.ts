@@ -37,6 +37,8 @@ const policy: Policy = {
     ],
     video_frame_count: 9,
     video_timeout_ms: 600000,
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
   },
 };
 const item: TrashItem = {
@@ -110,6 +112,7 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(section.match(/class="matching-badge">Default/g)).toHaveLength(5);
   expect(section).not.toContain('>Current<');
   expect(section).toContain('Read-only information');
+  expect(section).toContain('Size filter: disabled');
   expect(section).toContain(
     'No AI or neural methods are used. Matching runs entirely locally: SHA-256 content hashes and perceptual dHash comparisons.'
   );
@@ -146,12 +149,15 @@ it('shows Current badges independently for customized thresholds and sampling va
       ),
       video_frame_count: 1,
       video_timeout_ms: 90000,
+      min_file_size_mb: 1,
+      max_file_size_mb: 100,
     },
   });
   expect(html).toContain('Hamming distance ≤ 0');
   expect(html).toContain('Mean aligned-frame Hamming distance ≤ 12');
   expect(html).toContain('1 frame per video');
   expect(html).toContain('Sampling timeout: 90 seconds');
+  expect(html).toContain('Size filter: 1–100 MiB');
   expect(html.match(/class="matching-badge">Current/g)).toHaveLength(4);
   expect(html.match(/class="matching-badge">Default/g)).toHaveLength(1);
 });

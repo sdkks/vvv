@@ -2,13 +2,21 @@ import { lstat, opendir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type Database from 'better-sqlite3';
-import type { DirectoryEntry, DirectoryEntries, EntryFilter, ScanDir } from '@vvv/shared';
+import type {
+  DirectoryEntry,
+  DirectoryEntries,
+  EntryFilter,
+  FileSizePolicy,
+  ScanDir,
+} from '@vvv/shared';
+import { fileSizeSettings } from '../matching-settings.js';
 import {
   insideTrash,
   mediaKind,
   outsideRoot,
   scanDecision,
   skipsSymlink,
+  sizeExclusion,
 } from '../traversal-policy.js';
 import { idParams } from './scans.js';
 
@@ -23,7 +31,11 @@ const entryClass = (entry: EntryKey) => Number(entry.kind !== 'folder');
 const compare = (a: EntryKey, b: EntryKey) =>
   entryClass(a) - entryClass(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
-async function entries(dir: ScanDir, query: Query): Promise<DirectoryEntries> {
+async function entries(
+  dir: ScanDir,
+  query: Query,
+  sizes: FileSizePolicy
+): Promise<DirectoryEntries> {
   const input = query.path ?? '';
   const absolute = resolve(dir.path, input);
   if (
@@ -63,7 +75,9 @@ async function entries(dir: ScanDir, query: Query): Promise<DirectoryEntries> {
       }
       item.kind = info.isDirectory() ? 'folder' : (mediaKind(name) ?? 'other');
       item.size = info.isFile() ? Number(info.size) : null;
-      item.decision = scanDecision(info, mediaKind(name), dir, rootInfo.dev);
+      item.decision = scanDecision(info, mediaKind(name), dir, rootInfo.dev, sizes);
+      if (item.decision === 'excluded_by_size')
+        item.decision_detail = `${sizeExclusion(info.size, sizes)}. Configured range: minimum ${sizes.min_file_size_mb ? `${sizes.min_file_size_mb} MiB` : 'disabled'}, maximum ${sizes.max_file_size_mb ? `${sizes.max_file_size_mb} MiB` : 'disabled'}. Applies to the next scan.`;
     } catch (error) {
       const code = codeOf(error);
       item.decision = ['EACCES', 'EPERM'].includes(code) ? 'permission_denied' : 'other';
@@ -83,7 +97,14 @@ async function entries(dir: ScanDir, query: Query): Promise<DirectoryEntries> {
     current = await realpath(current);
   }
   const filter = query.filter ?? 'media';
-  const scope = JSON.stringify([dir.id, path, filter, dir.follow_symlinks, dir.cross_filesystems]);
+  const scope = JSON.stringify([
+    dir.id,
+    path,
+    filter,
+    dir.follow_symlinks,
+    dir.cross_filesystems,
+    sizes,
+  ]);
   let after: EntryKey | undefined;
   if (query.cursor) {
     try {
@@ -156,7 +177,8 @@ export function entryRoutes(app: FastifyInstance, db: Database.Database) {
             follow_symlinks: !!row.follow_symlinks,
             cross_filesystems: !!row.cross_filesystems,
           },
-          request.query
+          request.query,
+          fileSizeSettings(db)
         );
       } catch (error) {
         if (

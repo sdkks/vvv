@@ -75,6 +75,32 @@ not the password. Without a stable session secret, users sign in again after a
 restart and return to their previous browser location. No telemetry or external
 runtime services are used. `GET /api/health` is public and checks the database.
 
+## File-size inclusion filters
+
+Settings → Advanced matching controls offers inclusive minimum/maximum sizes in **MiB**
+(1 MiB = 1,048,576 bytes). Empty inputs display **Disabled** and save `0`; each bound is
+independent. Limits must be non-negative safe integers, with maximum ≥ minimum when
+both are enabled. `GET /api/settings` reports `matching.min_file_size_mb` and
+`matching.max_file_size_mb`; `PATCH /api/settings` accepts these keys at the top level.
+Both default to `0` (disabled). A changed bound returns the consequence
+`{ "type": "next_scan_required", "reason": "size_filter_change" }`.
+
+Size policy applies to the next scan; files outside the range are excluded from
+processing and results. Each scan captures the limits at start. Saving settings does
+not change an in-flight scan or existing results immediately. Directory preview uses
+the saved limits and shows **Excluded by size**, the reason, and the configured range.
+
+Excluded files remain in the catalog as `status='excluded'`. Their `error` column stores
+an `excluded_by_size:` reason, not a processing failure. They count as discovered and
+processed (eligibility evaluated), never as scan errors, and do not enter groups,
+exports, or Trash. No source files are moved or deleted. On a later scan, widening the
+range returns eligible files to processing, reusing unchanged SHA-256 checkpoints;
+files excluded before their first processing receive full analysis. files excluded before their first processing receive full analysis. Excluded files
+follow the same missing sweep as processed files: a deleted excluded file is
+marked missing, and rediscovery re-evaluates the size policy (staying excluded or
+returning to processing as appropriate). Existing quarantine and pending
+filesystem-operation protections still take priority over size eligibility.
+
 ## Scan API
 
 All scan routes require the session cookie obtained from `POST /api/auth/login`.
