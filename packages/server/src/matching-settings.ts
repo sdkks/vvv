@@ -4,10 +4,12 @@ import type { FileHashAlgorithm, FileSizePolicy, MatchingSettings } from '@vvv/s
 const defaults = {
   match_images_enabled: { value: 1, min: 0, max: 1 },
   match_videos_enabled: { value: 1, min: 0, max: 1 },
+  match_audio_enabled: { value: 1, min: 0, max: 1 },
   image_phash_threshold: { value: 6, min: 0, max: 64 },
   video_phash_threshold: { value: 10, min: 0, max: 64 },
   video_frame_count: { value: 9, min: 1, max: 64 },
   video_timeout_ms: { value: 600000, min: 1, max: 2147483647 },
+  audio_timeout_ms: { value: 600000, min: 1, max: 2147483647 },
   min_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
   max_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
 };
@@ -39,8 +41,11 @@ export function fileHashAlgorithm(db: Database.Database): FileHashAlgorithm {
   return value;
 }
 
-export function matchingEnabled(db: Database.Database, kind: 'image' | 'video') {
-  return matchingSetting(db, `match_${kind}s_enabled`) === 1;
+export function matchingEnabled(db: Database.Database, kind: 'image' | 'video' | 'audio') {
+  // The audio switch is singular: match_audio_enabled, unlike match_images/match_videos.
+  return (
+    matchingSetting(db, kind === 'audio' ? 'match_audio_enabled' : `match_${kind}s_enabled`) === 1
+  );
 }
 
 export function validSizeRange({ min_file_size_mb: min, max_file_size_mb: max }: FileSizePolicy) {
@@ -84,8 +89,16 @@ export function matchingSettings(db: Database.Database): MatchingSettings {
         enabled: matchingEnabled(db, 'video'),
         threshold: matchingSetting(db, 'video_phash_threshold'),
       },
+      {
+        id: 'audio_chromaprint',
+        label: 'Audio matching (Chromaprint)',
+        scope: 'audio files and videos with sound',
+        enabled: matchingEnabled(db, 'audio'),
+        threshold: null,
+      },
     ],
     video_frame_count: matchingSetting(db, 'video_frame_count'),
     video_timeout_ms: matchingSetting(db, 'video_timeout_ms'),
+    audio_timeout_ms: matchingSetting(db, 'audio_timeout_ms'),
   };
 }

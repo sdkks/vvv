@@ -126,8 +126,9 @@ it('uses scanner allowlists, folder-first stable names, filters, metadata sizes 
     'wmv',
     'flv',
   ];
+  const audios = ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg'];
   await mkdir(join(media, 'z-folder'));
-  for (const extension of [...images, ...videos, 'txt', 'bmp', 'heic'])
+  for (const extension of [...images, ...videos, ...audios, 'txt', 'bmp', 'heic'])
     await put(`file.${extension.toUpperCase()}`);
   const names = await page({ filter: 'all' });
   expect(names.items[0]).toEqual({
@@ -137,11 +138,11 @@ it('uses scanner allowlists, folder-first stable names, filters, metadata sizes 
     size: null,
     decision: 'folder',
   });
-  for (const extension of [...images, ...videos])
+  for (const extension of [...images, ...videos, ...audios])
     expect(names.items).toContainEqual({
       name: `file.${extension.toUpperCase()}`,
       type: 'file',
-      kind: images.includes(extension) ? 'image' : 'video',
+      kind: images.includes(extension) ? 'image' : audios.includes(extension) ? 'audio' : 'video',
       size: 9,
       decision: 'would_process',
     });
@@ -159,7 +160,7 @@ it('uses scanner allowlists, folder-first stable names, filters, metadata sizes 
       .map((item) => item.name)
       .sort()
   );
-  expect((await page()).items).toHaveLength(images.length + videos.length + 1);
+  expect((await page()).items).toHaveLength(images.length + videos.length + audios.length + 1);
   expect(hashing.processFile).not.toHaveBeenCalled();
   expect(hashing.imageHash).not.toHaveBeenCalled();
   expect(video.videoHash).not.toHaveBeenCalled();

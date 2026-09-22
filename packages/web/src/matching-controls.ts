@@ -17,6 +17,7 @@ export const matchingFields = [
 export const matchingToggles = [
   { key: 'match_images_enabled', kind: 'image', label: 'Image perceptual matching' },
   { key: 'match_videos_enabled', kind: 'video', label: 'Video perceptual matching' },
+  { key: 'match_audio_enabled', kind: 'audio', label: 'Audio matching (Chromaprint)' },
 ] as const;
 type NumericKey = (typeof matchingFields)[number]['key'];
 export type MatchingDraft = Record<NumericKey | 'file_hash_algorithm', string> &
@@ -42,6 +43,7 @@ export function matchingDraft(settings: MatchingSettings): MatchingDraft {
     file_hash_algorithm: settings.file_hash_algorithm,
     match_images_enabled: settings.methods.some((m) => m.id === 'image_dhash' && m.enabled),
     match_videos_enabled: settings.methods.some((m) => m.id === 'video_dhash' && m.enabled),
+    match_audio_enabled: settings.methods.some((m) => m.id === 'audio_chromaprint' && m.enabled),
     image_phash_threshold: String(settings.methods.find((m) => m.id === 'image_dhash')?.threshold),
     video_phash_threshold: String(settings.methods.find((m) => m.id === 'video_dhash')?.threshold),
     video_frame_count: String(settings.video_frame_count),
@@ -88,6 +90,7 @@ export function matchingPayload(draft: MatchingDraft): UpdateSettingsRequest {
     file_hash_algorithm: draft.file_hash_algorithm,
     match_images_enabled: draft.match_images_enabled,
     match_videos_enabled: draft.match_videos_enabled,
+    match_audio_enabled: draft.match_audio_enabled,
     ...(draft.match_images_enabled
       ? { image_phash_threshold: Number(draft.image_phash_threshold) }
       : {}),
@@ -108,6 +111,11 @@ export function consequenceMessage(consequence: SettingsConsequence) {
   if (consequence.reason === 'match_enabled')
     return `Re-match ${consequence.kind} files after the next scan completes. Scans automatically start matching.`;
   return consequenceMessages[consequence.type];
+}
+export function toggleHelp(kind: 'image' | 'video' | 'audio') {
+  return kind === 'audio'
+    ? 'Turning off skips audio fingerprinting on future scans. Existing audio groups remain until re-match; re-match removes them. Turning on fingerprints existing audio files and soundtracks on the next scan without content re-hashing; re-match afterwards.'
+    : `Turning off skips future ${kind} perceptual hashing. Existing ${kind} groups remain until re-match; re-match removes them. Turning on analyzes existing ${kind} files on the next scan without content re-hashing; re-match afterwards.`;
 }
 export function mergeConsequences(current: SettingsConsequence[], next: SettingsConsequence[]) {
   return [

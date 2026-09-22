@@ -86,9 +86,9 @@ export function PreviewContents({
       </p>
       <p className="metadata">
         Symlinks {dir.follow_symlinks ? 'followed within this root' : 'not followed'} · Filesystem
-        boundaries {dir.cross_filesystems ? 'crossed' : 'not crossed'} · Images and videos · Saved
-        size policy applies · {filter === 'media' ? 'Media candidates' : 'All entries'}. Trash is
-        excluded.
+        boundaries {dir.cross_filesystems ? 'crossed' : 'not crossed'} · Images, videos, and audio ·
+        Saved size policy applies · {filter === 'media' ? 'Media candidates' : 'All entries'}. Trash
+        is excluded.
       </p>
       <nav aria-label="Preview breadcrumb" className="toolbar">
         {breadcrumbs(path).map((crumb, index) => (

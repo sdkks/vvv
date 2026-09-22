@@ -5,7 +5,8 @@ import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { FileHashAlgorithm, FileSizePolicy, ScanLogLevel, ScanLogStep, ScanProgress } from '@vvv/shared';
 import { imageHash, imageMetadata, processFile, storeHashes } from './hashing.js';
-import { MediaWork, videoHash, videoMetadata } from './video.js';
+import { MediaWork, VideoFailure, videoHash, videoMetadata } from './video.js';
+import { audioFingerprint, storeSubfingerprints } from './audio.js';
 import type { ScanLog } from './scan-log.js';
 import {
   fileHashAlgorithm,
@@ -44,7 +45,8 @@ export class Scanner {
   private currentFile?: string;
   private scanId = 0;
   private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
-  private perceptual = { image: true, video: true };
+  // Audio means fingerprinting, not perceptual hashing; the switch gates the fpcalc step.
+  private perceptual = { image: true, video: true, audio: true };
   private algorithm: FileHashAlgorithm = 'sha256';
   constructor(
     private db: Database.Database,
@@ -93,6 +95,7 @@ export class Scanner {
     this.perceptual = {
       image: matchingEnabled(this.db, 'image'),
       video: matchingEnabled(this.db, 'video'),
+      audio: matchingEnabled(this.db, 'audio'),
     };
     const id = Number(
       this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
@@ -151,11 +154,16 @@ export class Scanner {
           `SELECT size,mtime_ns,CASE WHEN status IN ('done','hashed') AND sha256 IS NULL
           THEN 'pending' WHEN status='done' AND ?
           AND NOT EXISTS (SELECT 1 FROM phashes WHERE file_id=files.id AND frame_idx=0)
-          THEN 'hashed' ELSE status END AS status FROM files WHERE scan_dir_id=? AND rel_path=?`
+          THEN 'hashed' WHEN status='done' AND ? AND kind IN ('audio','video')
+          AND audio_fingerprinted=0 THEN 'hashed' ELSE status END AS status
+          FROM files WHERE scan_dir_id=? AND rel_path=?`
         )
         .safeIntegers()
         .get(
-          Number(kind === 'image' ? this.perceptual.image : this.perceptual.video),
+          Number(
+            kind === 'image' ? this.perceptual.image : kind === 'video' ? this.perceptual.video : 0
+          ),
+          Number(this.perceptual.audio),
           dir.id,
           path
         ) as { size: bigint; mtime_ns: bigint; status: string } | undefined;
@@ -178,12 +186,17 @@ export class Scanner {
         size=excluded.size,mtime_ns=excluded.mtime_ns,status=excluded.status,error=excluded.error,
         sha256=CASE WHEN files.size=excluded.size AND files.mtime_ns=excluded.mtime_ns
           THEN files.sha256 ELSE NULL END,
+        audio_fingerprinted=CASE WHEN files.size=excluded.size AND files.mtime_ns=excluded.mtime_ns
+          THEN files.audio_fingerprinted ELSE 0 END,
         last_seen_scan_id=excluded.last_seen_scan_id,updated_at=datetime('now') RETURNING id`
         )
         .get(dir.id, path, kind, size, mtime, status, scan, error ?? exclusion) as { id: number };
       // Invalidate stale perceptual work with changed metadata, including while excluded.
       // Otherwise a resumed scan could mistake old frames for a hash-only checkpoint.
-      if (previous && !unchanged) storeHashes(this.db, recorded.id, []);
+      if (previous && !unchanged) {
+        storeHashes(this.db, recorded.id, []);
+        storeSubfingerprints(this.db, recorded.id, []);
+      }
       if (exclusion) refreshFileGroups(this.db, recorded.id);
       this.db
         .prepare(
@@ -271,9 +284,13 @@ export class Scanner {
     let status = 'done';
     let failure = '';
     // Per-kind wall-clock span (first file start to last file end) and count of hashed files.
-    const hashed: Record<'image' | 'video', { count: number; first: number; last: number }> = {
+    const hashed: Record<
+      'image' | 'video' | 'audio',
+      { count: number; first: number; last: number }
+    > = {
       image: { count: 0, first: 0, last: 0 },
       video: { count: 0, first: 0, last: 0 },
+      audio: { count: 0, first: 0, last: 0 },
     };
     try {
       const traversalStart = Date.now();
@@ -346,10 +363,15 @@ export class Scanner {
                 const fileStart = Date.now();
                 let hashMs = 0;
                 let sampleMs = 0;
+                let audioMs = 0;
                 let error: string | null = null;
+                // The audio switch is snapshotted for the whole scan, like the perceptual ones.
+                const audioEligible =
+                  this.perceptual.audio && (file.kind === 'audio' || file.kind === 'video');
                 let result:
                   | { hashes: Buffer[]; width?: number; height?: number; duration_ms?: number }
                   | undefined;
+                let audio: { duration_ms: number; values: number[] } | undefined;
                 try {
                   if (file.status === 'pending' || file.sha256 === null) {
                     const hashStart = Date.now();
@@ -368,7 +390,7 @@ export class Scanner {
                       result = { ...image, hashes: [image.hash] };
                     } else result = { ...(await imageMetadata(path)), hashes: [] };
                     sampleMs = Date.now() - sampleStart;
-                  } else if (!file.reuse_phashes) {
+                  } else if (!file.reuse_phashes && file.kind === 'video') {
                     const sampleStart = Date.now();
                     const options = {
                       timeout: matchingSetting(this.db, 'video_timeout_ms'),
@@ -383,28 +405,62 @@ export class Scanner {
                       : { ...(await videoMetadata(path, options)), hashes: [] };
                     sampleMs = Date.now() - sampleStart;
                   }
+                  if (audioEligible) {
+                    const audioStart = Date.now();
+                    const fingerprint = await audioFingerprint(path, {
+                      timeout: matchingSetting(this.db, 'audio_timeout_ms'),
+                      signal: this.abort.signal,
+                    });
+                    audioMs = Date.now() - audioStart;
+                    if (fingerprint)
+                      audio = {
+                        duration_ms: Math.round(fingerprint.duration * 1000),
+                        values: fingerprint.values,
+                      };
+                    else if (file.kind === 'audio')
+                      // Standalone audio always attempts: no audio stream means undecodable media.
+                      throw new VideoFailure('no_audio_stream');
+                    // A silent video skips cleanly: done without subfingerprints.
+                  }
                 } catch (cause) {
                   if (this.abort.signal.aborted) return;
                   error = message(cause);
                 }
                 this.db.transaction(() => {
-                  if (result && this.db.prepare('SELECT id FROM files WHERE id=?').get(file.id)) {
-                    storeHashes(this.db, file.id, result.hashes);
-                    this.db
-                      .prepare('UPDATE files SET width=?,height=?,duration_ms=? WHERE id=?')
-                      .run(result.width, result.height, result.duration_ms ?? null, file.id);
+                  if (
+                    (result || audio) &&
+                    this.db.prepare('SELECT id FROM files WHERE id=?').get(file.id)
+                  ) {
+                    if (result) {
+                      storeHashes(this.db, file.id, result.hashes);
+                      this.db
+                        .prepare('UPDATE files SET width=?,height=?,duration_ms=? WHERE id=?')
+                        .run(result.width, result.height, result.duration_ms ?? null, file.id);
+                    }
+                    if (audio) {
+                      storeSubfingerprints(this.db, file.id, audio.values);
+                      if (file.kind === 'audio')
+                        this.db
+                          .prepare('UPDATE files SET duration_ms=? WHERE id=?')
+                          .run(audio.duration_ms, file.id);
+                    }
                   }
+                  // Settling the audio step (stored or clean skip) stops future reprocessing;
+                  // a failed attempt stays unsettled so the next scan retries it.
                   this.db
                     .prepare(
-                      "UPDATE files SET status=?,error=?,updated_at=datetime('now') WHERE id=?"
+                      "UPDATE files SET status=?,error=?,audio_fingerprinted=?,updated_at=datetime('now') WHERE id=?"
                     )
-                    .run(error ? 'error' : 'done', error, file.id);
+                    .run(error ? 'error' : 'done', error, Number(audioEligible && !error), file.id);
                   this.db
                     .prepare('UPDATE scans SET processed=processed+1,errors=errors+? WHERE id=?')
                     .run(Number(!!error), id);
                 })();
                 this.publish();
-                const stat = file.kind === 'image' || file.kind === 'video' ? hashed[file.kind] : undefined;
+                const stat =
+                  file.kind === 'image' || file.kind === 'video' || file.kind === 'audio'
+                    ? hashed[file.kind]
+                    : undefined;
                 if (stat) {
                   stat.count++;
                   if (!stat.first) stat.first = fileStart;
@@ -414,6 +470,7 @@ export class Scanner {
                 const slow = [
                   hashMs > 10_000 ? `hashing ${Math.round(hashMs / 100) / 10}s` : '',
                   sampleMs > 10_000 ? `sampling ${Math.round(sampleMs / 100) / 10}s` : '',
+                  audioMs > 10_000 ? `fingerprinting ${Math.round(audioMs / 100) / 10}s` : '',
                 ]
                   .filter(Boolean)
                   .join(', ');
@@ -436,7 +493,7 @@ export class Scanner {
         );
         this.currentFile = undefined;
       }
-      for (const kind of ['image', 'video'] as const) {
+      for (const kind of ['image', 'video', 'audio'] as const) {
         const stat = hashed[kind];
         if (stat.count)
           this.logStep(

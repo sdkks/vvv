@@ -13,6 +13,7 @@ import {
   matchingErrors,
   matchingFields,
   matchingPayload,
+  toggleHelp,
   type MatchingDraft,
 } from './matching-controls';
 
@@ -94,11 +95,7 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
                 {label} — {values[key] ? 'Enabled' : 'Off'}
               </span>
             </label>
-            <p id={`${key}-help`}>
-              Turning off skips future {kind} perceptual hashing. Existing {kind} groups remain
-              until re-match; re-match removes them. Turning on analyzes existing {kind} files on
-              the next scan without content re-hashing; re-match afterwards.
-            </p>
+            <p id={`${key}-help`}>{toggleHelp(kind)}</p>
             {fieldErrors[key] && <p role="alert">{fieldErrors[key]}</p>}
           </div>
         ))}

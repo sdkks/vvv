@@ -41,9 +41,17 @@ const matching: Settings['matching'] = {
       enabled: true,
       threshold: 10,
     },
+    {
+      id: 'audio_chromaprint',
+      label: 'Audio matching (Chromaprint)',
+      scope: 'audio files and videos with sound',
+      enabled: true,
+      threshold: null,
+    },
   ],
   video_frame_count: 9,
   video_timeout_ms: 600000,
+  audio_timeout_ms: 600000,
   min_file_size_mb: 0,
   max_file_size_mb: 0,
 };
@@ -112,10 +120,16 @@ it('reports independently seeded effective values, including a zero threshold', 
     file_hash_algorithm: 'sha256',
     methods: matching.methods.map((method) => ({
       ...method,
-      threshold: method.id === 'exact' ? null : method.id === 'image_dhash' ? 0 : 12,
+      threshold:
+        method.id === 'exact' || method.id === 'audio_chromaprint'
+          ? null
+          : method.id === 'image_dhash'
+            ? 0
+            : 12,
     })),
     video_frame_count: 3,
     video_timeout_ms: 90000,
+    audio_timeout_ms: 600000,
     min_file_size_mb: 0,
     max_file_size_mb: 0,
   });

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { scanDecision, sizeExclusion } from './traversal-policy.js';
+import { mediaKind, scanDecision, sizeExclusion } from './traversal-policy.js';
 
 const mib = 1048576n;
 const sizes = { min_file_size_mb: 1, max_file_size_mb: 2 };
@@ -40,4 +40,24 @@ it('applies size eligibility only after traversal protections and supported-file
     'symlink_not_followed'
   );
   expect(scanDecision(info, 'video', policy, 2n, sizes)).toBe('filesystem_boundary');
+});
+it('classifies audio extensions case-insensitively as their own kind', () => {
+  for (const extension of ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg']) {
+    expect(mediaKind(`song.${extension}`)).toBe('audio');
+    expect(mediaKind(`SONG.${extension.toUpperCase()}`)).toBe('audio');
+  }
+  expect(mediaKind('notes.txt')).toBeNull();
+  expect(mediaKind('clip.mp4')).toBe('video');
+  const info = {
+    dev: 1n,
+    size: 0n,
+    isFile: () => true,
+    isDirectory: () => false,
+    isSymbolicLink: () => false,
+  };
+  const policy = { follow_symlinks: false, cross_filesystems: false };
+  expect(scanDecision(info, 'audio', policy, 1n, sizes)).toBe('excluded_by_size');
+  expect(
+    scanDecision(info, 'audio', policy, 1n, { min_file_size_mb: 0, max_file_size_mb: 0 })
+  ).toBe('would_process');
 });

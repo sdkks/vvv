@@ -130,6 +130,9 @@ it('returns JSON 404 for unknown ids, missing videos, non-done files, and vanish
   await image();
   expectMissing(await get(999));
   expectMissing(await get(put('video.mp4', 'video')));
+  // Audio files never get thumbnails: no decode attempt, a genuine 404.
+  expectMissing(await get(put('song.mp3', 'audio')));
+  expectMissing(await get(put('silent.m4a', 'audio')));
   for (const status of ['pending', 'hashed', 'error', 'quarantined', 'missing'])
     expectMissing(await get(put(`${status}.jpg`, 'image', status)));
   expectMissing(await get(put('absent.jpg')));

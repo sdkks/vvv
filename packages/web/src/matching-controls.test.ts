@@ -27,6 +27,7 @@ const draft: MatchingDraft = {
   file_hash_algorithm: 'sha256',
   match_images_enabled: true,
   match_videos_enabled: true,
+  match_audio_enabled: true,
   image_phash_threshold: '6',
   video_phash_threshold: '10',
   video_frame_count: '9',
@@ -85,6 +86,7 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     ],
     video_frame_count: 1,
     video_timeout_ms: 90000,
+    audio_timeout_ms: 600000,
     min_file_size_mb: 0,
     max_file_size_mb: 0,
   });
@@ -92,6 +94,7 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     file_hash_algorithm: 'sha256',
     match_images_enabled: true,
     match_videos_enabled: true,
+    match_audio_enabled: false,
     image_phash_threshold: '0',
     video_phash_threshold: '64',
     video_frame_count: '1',
@@ -103,6 +106,7 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     file_hash_algorithm: 'sha256',
     match_images_enabled: true,
     match_videos_enabled: true,
+    match_audio_enabled: false,
     image_phash_threshold: 0,
     video_phash_threshold: 64,
     video_frame_count: 1,
@@ -188,6 +192,7 @@ const matching: MatchingSettings = {
   ],
   video_frame_count: 9,
   video_timeout_ms: 10001,
+  audio_timeout_ms: 600000,
   min_file_size_mb: 0,
   max_file_size_mb: 0,
 };
@@ -228,9 +233,14 @@ it('renders off controls disabled with explanations and never provides an exact 
     methods: matching.methods.map((m) => (m.id === 'exact' ? m : { ...m, enabled: false })),
   };
   const html = renderConsequences([], off);
-  expect(html.match(/type="checkbox"/g)).toHaveLength(2);
+  expect(html.match(/type="checkbox"/g)).toHaveLength(3);
   expect(html).toContain('Image perceptual matching — Off');
   expect(html).toContain('Video perceptual matching — Off');
+  expect(html).toContain('Audio matching (Chromaprint) — Off');
+  expect(html).toContain('Turning off skips audio fingerprinting on future scans.');
+  expect(html).toContain(
+    'Turning on fingerprints existing audio files and soundtracks on the next scan without content re-hashing'
+  );
   for (const field of [
     'image_phash_threshold',
     'video_phash_threshold',
@@ -246,6 +256,7 @@ it('renders off controls disabled with explanations and never provides an exact 
   expect(matchingDraft(off)).toMatchObject({
     match_images_enabled: false,
     match_videos_enabled: false,
+    match_audio_enabled: false,
   });
   const invalidOff = {
     ...matchingDraft(off),
@@ -257,9 +268,42 @@ it('renders off controls disabled with explanations and never provides an exact 
     file_hash_algorithm: 'sha256',
     match_images_enabled: false,
     match_videos_enabled: false,
+    match_audio_enabled: false,
     min_file_size_mb: 0,
     max_file_size_mb: 0,
   });
+});
+it('reflects an enabled audio method in the draft, payload, and rematch message', () => {
+  const withAudio: MatchingSettings = {
+    ...matching,
+    methods: [
+      ...matching.methods,
+      {
+        id: 'audio_chromaprint',
+        label: 'Audio matching (Chromaprint)',
+        scope: 'audio files and videos with sound',
+        enabled: true,
+        threshold: null,
+      },
+    ],
+  };
+  expect(matchingDraft(withAudio)).toMatchObject({ match_audio_enabled: true });
+  expect(matchingPayload(matchingDraft(withAudio))).toMatchObject({ match_audio_enabled: true });
+  const consequence: SettingsConsequence = {
+    type: 'match_enabled',
+    kind: 'audio',
+    message: 'Audio files and soundtracks will be fingerprinted on the next scan.',
+  };
+  expect(consequenceMessage(consequence)).toBe(consequence.message);
+  expect(
+    consequenceMessage({ type: 'rematch_required', reason: 'match_enabled', kind: 'audio' })
+  ).toBe('Re-match audio files after the next scan completes. Scans automatically start matching.');
+  const html = renderConsequences(
+    [consequence, { type: 'rematch_required', reason: 'match_enabled', kind: 'audio' }],
+    withAudio
+  );
+  expect(html).toContain('Audio files and soundtracks will be fingerprinted on the next scan.');
+  expect(html).toContain('Re-match audio files after the next scan completes.');
 });
 it('gates newly enabled matching until a scan and replaces obsolete same-kind consequences', () => {
   const enabled: SettingsConsequence[] = [

@@ -16,6 +16,9 @@ import {
 } from '../matching-settings.js';
 
 export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
+  // The audio switch is singular (match_audio_enabled), unlike match_images/match_videos.
+  const toggleKey = (kind: 'image' | 'video' | 'audio') =>
+    kind === 'audio' ? ('match_audio_enabled' as const) : (`match_${kind}s_enabled` as const);
   const read = (): Settings => {
     const { days, enabled } = retention(db);
     return { retention_days: days, auto_purge_enabled: enabled, matching: matchingSettings(db) };
@@ -36,10 +39,12 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
             file_hash_algorithm: { type: 'string', enum: ['sha256', 'blake2b512'] },
             match_images_enabled: { type: 'boolean' },
             match_videos_enabled: { type: 'boolean' },
+            match_audio_enabled: { type: 'boolean' },
             image_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
             video_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
             video_frame_count: { type: 'integer', minimum: 1, maximum: 64 },
             video_timeout_ms: { type: 'integer', minimum: 10000, maximum: 3600000 },
+            audio_timeout_ms: { type: 'integer', minimum: 10000, maximum: 3600000 },
             min_file_size_mb: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
             max_file_size_mb: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
           },
@@ -75,10 +80,10 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
           request.body.file_hash_algorithm !== fileHashAlgorithm(db);
         const thresholds = changed('image_phash_threshold') || changed('video_phash_threshold');
         const frames = changed('video_frame_count');
-        const timeout = changed('video_timeout_ms');
+        const timeout = changed('video_timeout_ms') || changed('audio_timeout_ms');
         const sizes = changed('min_file_size_mb') || changed('max_file_size_mb');
-        const toggled = (['image', 'video'] as const).filter((kind) =>
-          changed(`match_${kind}s_enabled`)
+        const toggled = (['image', 'video', 'audio'] as const).filter((kind) =>
+          changed(toggleKey(kind))
         );
         // Prevent in-flight work from restoring invalidated checkpoints or mixing settings.
         if (
@@ -118,13 +123,17 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
         if (timeout) consequences.push({ type: 'future_sampling_only', reason: 'timeout_change' });
         if (sizes) consequences.push({ type: 'next_scan_required', reason: 'size_filter_change' });
         for (const kind of toggled) {
-          const enabled = request.body[`match_${kind}s_enabled`];
+          const enabled = request.body[toggleKey(kind)];
           consequences.push({
             type: enabled ? 'match_enabled' : 'match_disabled',
             kind,
             message: enabled
-              ? `Existing ${kind} files will be analyzed on the next scan (no content re-hashing).`
-              : `Future scans skip ${kind} perceptual hashing; existing ${kind} groups remain until re-match; re-match removes them.`,
+              ? kind === 'audio'
+                ? 'Audio files and soundtracks will be fingerprinted on the next scan.'
+                : `Existing ${kind} files will be analyzed on the next scan (no content re-hashing).`
+              : kind === 'audio'
+                ? 'Future scans skip audio fingerprinting; existing audio groups remain until re-match; re-match removes them.'
+                : `Future scans skip ${kind} perceptual hashing; existing ${kind} groups remain until re-match; re-match removes them.`,
           });
           if (enabled)
             consequences.push({ type: 'rematch_required', reason: 'match_enabled', kind });

@@ -69,6 +69,7 @@ it.each([
   ['video_phash_threshold', 0, 64],
   ['video_frame_count', 1, 64],
   ['video_timeout_ms', 10000, 3600000],
+  ['audio_timeout_ms', 10000, 3600000],
   ['min_file_size_mb', 0, Number.MAX_SAFE_INTEGER],
   ['max_file_size_mb', 0, Number.MAX_SAFE_INTEGER],
 ] as const)('validates %s strictly and atomically with field detail', async (key, min, max) => {
@@ -127,6 +128,65 @@ it.each(['image', 'video'] as const)(
     expect(catalog()).toEqual(before);
   }
 );
+it('validates and persists the audio switch with audio-specific consequences and auth', async () => {
+  for (const value of [0, 1, 'true', 'false', '0', null, [], {}]) {
+    expect((await patch({ match_audio_enabled: value, retention_days: 12 })).statusCode).toBe(400);
+    expect((await get()).json<Settings>().retention_days).toBe(30);
+  }
+  expect(
+    (
+      await app.inject({
+        method: 'PATCH',
+        url: '/api/settings',
+        payload: { match_audio_enabled: false },
+      })
+    ).statusCode
+  ).toBe(401);
+  expect((await app.inject('/api/settings')).statusCode).toBe(401);
+  expect((await patch({ match_audios_enabled: false })).statusCode).toBe(400);
+  expect(
+    (await patch({ match_audio_enabled: true })).json<UpdateSettingsResponse>().consequences
+  ).toEqual([]);
+  expect((await get()).json<Settings>().matching.methods.at(-1)).toEqual({
+    id: 'audio_chromaprint',
+    label: 'Audio matching (Chromaprint)',
+    scope: 'audio files and videos with sound',
+    enabled: true,
+    threshold: null,
+  });
+  const before = catalog();
+  const disabled = (await patch({ match_audio_enabled: false })).json<UpdateSettingsResponse>();
+  expect(disabled.consequences).toEqual([
+    {
+      type: 'match_disabled',
+      kind: 'audio',
+      message:
+        'Future scans skip audio fingerprinting; existing audio groups remain until re-match; re-match removes them.',
+    },
+  ]);
+  expect(disabled.matching.methods.find((m) => m.id === 'audio_chromaprint')?.enabled).toBe(false);
+  // Repeating the unchanged value is a no-op with no consequences.
+  expect(
+    (await patch({ match_audio_enabled: false })).json<UpdateSettingsResponse>().consequences
+  ).toEqual([]);
+  await app.close();
+  app = await createServer({ ...config, dataDir: root }, false);
+  expect(
+    (await get()).json<Settings>().matching.methods.find((m) => m.id === 'audio_chromaprint')
+      ?.enabled
+  ).toBe(false);
+  expect(
+    (await patch({ match_audio_enabled: true })).json<UpdateSettingsResponse>().consequences
+  ).toEqual([
+    {
+      type: 'match_enabled',
+      kind: 'audio',
+      message: 'Audio files and soundtracks will be fingerprinted on the next scan.',
+    },
+    { type: 'rematch_required', reason: 'match_enabled', kind: 'audio' },
+  ]);
+  expect(catalog()).toEqual(before);
+});
 it.each(['image', 'video'] as const)(
   're-match skips disabled %s candidates without losing exact or other-kind groups',
   async (kind) => {
@@ -214,6 +274,7 @@ it('invalidates all content hashes atomically, preserves unavailable statuses an
         file_hash_algorithm: algorithm,
         methods: [
           expect.objectContaining({ id: 'exact', algorithm }),
+          expect.anything(),
           expect.anything(),
           expect.anything(),
         ],
@@ -434,6 +495,7 @@ it('rejects conflicting changes during active work before any partial write', as
   expect((await patch({ video_frame_count: 2 })).statusCode).toBe(409);
   expect((await patch({ match_images_enabled: false, retention_days: 1 })).statusCode).toBe(409);
   expect((await patch({ match_videos_enabled: false })).statusCode).toBe(409);
+  expect((await patch({ match_audio_enabled: false })).statusCode).toBe(409);
   expect((await patch({ match_videos_enabled: true })).statusCode).toBe(200);
   expect((await get()).json<Settings>()).toMatchObject({
     retention_days: 30,

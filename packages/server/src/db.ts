@@ -6,6 +6,7 @@ import { matchesMigration } from './migrations/003-matches.js';
 import { phashesMigration } from './migrations/004-phashes.js';
 import { quarantineMigration } from './migrations/005-quarantine.js';
 import { sizeFiltersMigration } from './migrations/006-size-filters.js';
+import { audioFingerprintsMigration } from './migrations/007-audio-fingerprints.js';
 
 const migrations = [
   'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -15,6 +16,7 @@ const migrations = [
   phashesMigration,
   quarantineMigration,
   sizeFiltersMigration,
+  audioFingerprintsMigration,
 ];
 export function openDatabase(dataDir: string) {
   const path = join(dataDir, 'vvv.db');

@@ -3,6 +3,7 @@ import type { FileSizePolicy, ScanDir, ScanDecision } from '@vvv/shared';
 
 type Policy = Pick<ScanDir, 'follow_symlinks' | 'cross_filesystems'>;
 const images = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'tiff', 'avif']);
+const audio = new Set(['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg']);
 const videos = new Set([
   'mp4',
   'mkv',
@@ -19,7 +20,13 @@ const videos = new Set([
 ]);
 export function mediaKind(path: string) {
   const extension = extname(path).slice(1).toLowerCase();
-  return images.has(extension) ? 'image' : videos.has(extension) ? 'video' : null;
+  return images.has(extension)
+    ? 'image'
+    : audio.has(extension)
+      ? 'audio'
+      : videos.has(extension)
+        ? 'video'
+        : null;
 }
 export const outsideRoot = (root: string, path: string) => {
   const rel = relative(root, path);

@@ -59,7 +59,7 @@ export type ScanDecision =
 export interface DirectoryEntry {
   name: string;
   type: 'folder' | 'file' | 'symlink';
-  kind: 'folder' | 'image' | 'video' | 'other';
+  kind: 'folder' | 'image' | 'video' | 'audio' | 'other';
   size: number | null;
   decision: ScanDecision;
   decision_detail?: string;
@@ -157,6 +157,7 @@ export type MatchingMethod = {
 } & (
   | { id: 'exact'; enabled: true; threshold: null; algorithm: FileHashAlgorithm }
   | { id: 'image_dhash' | 'video_dhash'; enabled: boolean; threshold: number }
+  | { id: 'audio_chromaprint'; enabled: boolean; threshold: null }
 );
 export interface FileSizePolicy {
   /** Inclusive MiB limits; zero disables that bound. */
@@ -168,6 +169,7 @@ export interface MatchingSettings extends FileSizePolicy {
   methods: MatchingMethod[];
   video_frame_count: number;
   video_timeout_ms: number;
+  audio_timeout_ms: number;
 }
 export interface RetentionSettings {
   retention_days: number;
@@ -180,16 +182,26 @@ export interface MatchingControls extends FileSizePolicy {
   file_hash_algorithm: FileHashAlgorithm;
   match_images_enabled: boolean;
   match_videos_enabled: boolean;
+  match_audio_enabled: boolean;
   image_phash_threshold: number;
   video_phash_threshold: number;
   video_frame_count: number;
   video_timeout_ms: number;
+  audio_timeout_ms: number;
 }
 export type UpdateSettingsRequest = Partial<RetentionSettings & MatchingControls>;
 export type SettingsConsequence =
   | { type: 'rematch_required'; reason: 'threshold_change' }
-  | { type: 'rematch_required'; reason: 'match_enabled'; kind: 'image' | 'video' }
-  | { type: 'match_enabled' | 'match_disabled'; kind: 'image' | 'video'; message: string }
+  | {
+      type: 'rematch_required';
+      reason: 'match_enabled';
+      kind: 'image' | 'video' | 'audio';
+    }
+  | {
+      type: 'match_enabled' | 'match_disabled';
+      kind: 'image' | 'video' | 'audio';
+      message: string;
+    }
   | { type: 'rescan_required'; reason: 'frame_count_change' }
   | { type: 'rehash_required'; message: string }
   | { type: 'future_sampling_only'; reason: 'timeout_change' }

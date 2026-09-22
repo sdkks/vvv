@@ -13,6 +13,7 @@ import { Quarantine } from './quarantine.js';
 import { settingsRoutes } from './routes/settings.js';
 import * as hashing from './hashing.js';
 import * as video from './video.js';
+import * as audio from './audio.js';
 
 vi.mock('./hashing.js', { spy: true });
 vi.mock('./video.js', async (importOriginal) => {
@@ -22,6 +23,10 @@ vi.mock('./video.js', async (importOriginal) => {
     videoHash: vi.fn(original.videoHash),
     videoMetadata: vi.fn(original.videoMetadata),
   };
+});
+vi.mock('./audio.js', async (importOriginal) => {
+  const original = await importOriginal<typeof audio>();
+  return { ...original, audioFingerprint: vi.fn(original.audioFingerprint) };
 });
 vi.mock('node:fs/promises', { spy: true });
 const realFs = await vi.importActual<typeof fs>('node:fs/promises');
@@ -71,6 +76,7 @@ beforeEach(async () => {
     duration: 2,
     duration_ms: 2000,
   });
+  vi.mocked(audio.audioFingerprint).mockResolvedValue({ duration: 2, values: [7, 9] });
   vi.mocked(fs.lstat).mockImplementation(realFs.lstat);
   vi.mocked(fs.realpath).mockImplementation(realFs.realpath);
   directory = await mkdtemp(join(tmpdir(), 'vvv-scanner-'));
@@ -108,6 +114,12 @@ it('discovers allowlisted images/videos in multiple roots, streams SHA-256, and 
     'j.m2ts',
     'k.wmv',
     'l.flv',
+    'm.mp3',
+    'n.m4a',
+    'o.aac',
+    'p.flac',
+    'q.wav',
+    'r.ogg',
   ];
   await Promise.all(
     [...allowed, 'text.txt', 'unsupported.bmp', 'unsupported.heic'].map((path) => put(path))
@@ -128,6 +140,9 @@ it('discovers allowlisted images/videos in multiple roots, streams SHA-256, and 
   );
   expect(files()).toContainEqual(
     expect.objectContaining({ rel_path: 'nested/a.mp4', kind: 'video', status: 'done' })
+  );
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'm.mp3', kind: 'audio', status: 'done' })
   );
   expect(scanner.current()).toEqual({
     id: 1,
@@ -757,6 +772,172 @@ it.each(['image', 'video'] as const)(
     expect(perceptual).not.toHaveBeenCalled();
   }
 );
+
+it('fingerprints audio files and videos with sound while silently skipping silent videos', async () => {
+  seed();
+  await put('song.mp3');
+  await put('clip.mp4');
+  await put('silent.mkv');
+  vi.mocked(audio.audioFingerprint).mockImplementation(async (path) =>
+    path.endsWith('silent.mkv') ? null : { duration: 2, values: [7, 9] }
+  );
+  await scan();
+  expect(vi.mocked(audio.audioFingerprint)).toHaveBeenCalledTimes(3);
+  const options = vi.mocked(audio.audioFingerprint).mock.calls[0]![1];
+  expect(options.timeout).toBe(600000);
+  expect(options.signal).toBeInstanceOf(AbortSignal);
+  expect(
+    db
+      .prepare(
+        `SELECT f.rel_path,f.status,f.duration_ms,s.idx,s.value FROM files f
+        LEFT JOIN audio_subfingerprints s ON s.file_id=f.id ORDER BY f.rel_path,s.idx`
+      )
+      .all()
+  ).toEqual([
+    { rel_path: 'clip.mp4', status: 'done', duration_ms: 2000, idx: 0, value: 7 },
+    { rel_path: 'clip.mp4', status: 'done', duration_ms: 2000, idx: 1, value: 9 },
+    { rel_path: 'silent.mkv', status: 'done', duration_ms: 2000, idx: null, value: null },
+    { rel_path: 'song.mp3', status: 'done', duration_ms: 2000, idx: 0, value: 7 },
+    { rel_path: 'song.mp3', status: 'done', duration_ms: 2000, idx: 1, value: 9 },
+  ]);
+  // A settled second scan neither re-hashes nor re-fingerprints anything.
+  vi.mocked(audio.audioFingerprint).mockClear();
+  hash.mockClear();
+  await scan();
+  expect(audio.audioFingerprint).not.toHaveBeenCalled();
+  expect(hash).not.toHaveBeenCalled();
+});
+
+it('honors audio_timeout_ms when fingerprinting', async () => {
+  seed();
+  await put('song.mp3');
+  db.exec("INSERT INTO settings VALUES ('audio_timeout_ms','12345')");
+  await scan();
+  expect(vi.mocked(audio.audioFingerprint).mock.calls[0]![1]).toMatchObject({ timeout: 12345 });
+});
+
+it('skips fingerprinting while disabled, backfills on enable without re-hashing, and settles again', async () => {
+  seed();
+  await put('song.mp3');
+  await put('clip.mp4');
+  db.exec("INSERT INTO settings VALUES ('match_audio_enabled','0')");
+  await scan();
+  expect(audio.audioFingerprint).not.toHaveBeenCalled();
+  const rows = () =>
+    db
+      .prepare(
+        'SELECT rel_path,status,sha256,audio_fingerprinted,duration_ms FROM files ORDER BY rel_path'
+      )
+      .all();
+  const before = rows() as {
+    rel_path: string;
+    status: string;
+    sha256: string;
+    audio_fingerprinted: number;
+    duration_ms: number | null;
+  }[];
+  expect(before).toEqual([
+    {
+      rel_path: 'clip.mp4',
+      status: 'done',
+      sha256: expect.any(String),
+      audio_fingerprinted: 0,
+      duration_ms: 2000,
+    },
+    {
+      rel_path: 'song.mp3',
+      status: 'done',
+      sha256: expect.any(String),
+      audio_fingerprinted: 0,
+      duration_ms: null,
+    },
+  ]);
+  expect(db.prepare('SELECT count(*) AS n FROM audio_subfingerprints').get()).toEqual({ n: 0 });
+  hash.mockClear();
+  await scan();
+  expect(audio.audioFingerprint).not.toHaveBeenCalled();
+  expect(hash).not.toHaveBeenCalled();
+  db.exec("UPDATE settings SET value='1' WHERE key='match_audio_enabled'");
+  await scan();
+  expect(vi.mocked(audio.audioFingerprint)).toHaveBeenCalledTimes(2);
+  expect(hash).not.toHaveBeenCalled();
+  expect(rows()).toEqual([
+    {
+      rel_path: 'clip.mp4',
+      status: 'done',
+      sha256: before[0]!.sha256,
+      audio_fingerprinted: 1,
+      duration_ms: 2000,
+    },
+    {
+      rel_path: 'song.mp3',
+      status: 'done',
+      sha256: before[1]!.sha256,
+      audio_fingerprinted: 1,
+      duration_ms: 2000,
+    },
+  ]);
+  expect(db.prepare('SELECT count(*) AS n FROM audio_subfingerprints').get()).toEqual({ n: 4 });
+  vi.mocked(audio.audioFingerprint).mockClear();
+  await scan();
+  expect(audio.audioFingerprint).not.toHaveBeenCalled();
+});
+
+it('fails the offending file alone when fingerprinting errors, then retries on the next scan', async () => {
+  seed();
+  await put('song.mp3');
+  await put('other.mp3');
+  vi.mocked(audio.audioFingerprint).mockImplementation(async (path) => {
+    if (path.endsWith('song.mp3')) throw new video.VideoFailure('decode_failed', 'corrupt');
+    return { duration: 2, values: [1] };
+  });
+  await scan();
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'song.mp3', kind: 'audio', status: 'error' })
+  );
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'other.mp3', kind: 'audio', status: 'done' })
+  );
+  expect(scanner.current()).toMatchObject({ errors: 1 });
+  expect(db.prepare('SELECT DISTINCT file_id FROM audio_subfingerprints').all()).toHaveLength(1);
+  vi.mocked(audio.audioFingerprint).mockResolvedValue({ duration: 2, values: [1] });
+  await scan();
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'song.mp3', status: 'done', error: null })
+  );
+  expect(db.prepare('SELECT count(*) AS n FROM audio_subfingerprints').get()).toEqual({ n: 2 });
+});
+
+it('treats undecodable standalone audio as an error, not a silent skip', async () => {
+  seed();
+  await put('fake.mp3');
+  vi.mocked(audio.audioFingerprint).mockResolvedValue(null);
+  await scan();
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'fake.mp3', status: 'error' })
+  );
+  expect(scanner.current()).toMatchObject({ errors: 1 });
+});
+
+it('replaces subfingerprints when audio content changes', async () => {
+  seed();
+  await put('song.mp3', 'first');
+  await scan();
+  expect(db.prepare('SELECT value FROM audio_subfingerprints ORDER BY idx').all()).toEqual([
+    { value: 7 },
+    { value: 9 },
+  ]);
+  vi.mocked(audio.audioFingerprint).mockResolvedValue({ duration: 4, values: [3] });
+  await put('song.mp3', 'second');
+  await scan();
+  expect(db.prepare('SELECT value FROM audio_subfingerprints ORDER BY idx').all()).toEqual([
+    { value: 3 },
+  ]);
+  const row = db
+    .prepare('SELECT duration_ms,audio_fingerprinted,status FROM files WHERE rel_path=?')
+    .get('song.mp3');
+  expect(row).toEqual({ duration_ms: 4000, audio_fingerprinted: 1, status: 'done' });
+});
 
 it('uses the scan-start switches even when a switch changes before traversal finishes', async () => {
   seed();

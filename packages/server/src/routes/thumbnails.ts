@@ -47,6 +47,8 @@ export function thumbnailRoutes(
   async function load(id: string) {
     const file = lookup.get(id) as File | undefined;
     if (!file) return null;
+    // Audio and other non-visual kinds have no thumbnail: a genuine 404, never a decode attempt.
+    if (file.kind !== 'image' && file.kind !== 'video') return null;
     const source = join(file.path, file.rel_path);
     let info;
     try {

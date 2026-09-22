@@ -52,6 +52,7 @@ it('defaults content hashing to SHA-256, reports either algorithm and rejects co
         expect.objectContaining({ id: 'exact', algorithm, label: `Exact duplicates — ${label}` }),
         expect.anything(),
         expect.anything(),
+        expect.objectContaining({ id: 'audio_chromaprint', threshold: null }),
       ],
     });
   }

@@ -37,11 +37,15 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
               <p>
                 {method.id === 'exact'
                   ? 'Identical content hashes; no similarity threshold'
-                  : `${method.id === 'video_dhash' ? 'Mean aligned-frame Hamming distance' : 'Hamming distance'} ≤ ${method.threshold}`}{' '}
-                <ValueBadge
-                  current={method.threshold}
-                  fallback={method.id === 'exact' ? null : method.id === 'image_dhash' ? 6 : 10}
-                />
+                  : method.id === 'audio_chromaprint'
+                    ? 'Raw Chromaprint subfingerprints; finds clips inside longer recordings'
+                    : `${method.id === 'video_dhash' ? 'Mean aligned-frame Hamming distance' : 'Hamming distance'} ≤ ${method.threshold}`}{' '}
+                {method.id !== 'audio_chromaprint' && (
+                  <ValueBadge
+                    current={method.threshold}
+                    fallback={method.id === 'exact' ? null : method.id === 'image_dhash' ? 6 : 10}
+                  />
+                )}
               </p>
               {method.id === 'video_dhash' && (
                 <>
@@ -56,6 +60,12 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
                   </p>
                 </>
               )}
+              {method.id === 'audio_chromaprint' && (
+                <p>
+                  Fingerprinting timeout: {duration(matching.audio_timeout_ms)}{' '}
+                  <ValueBadge current={matching.audio_timeout_ms} fallback={600000} />
+                </p>
+              )}
             </dd>
           </div>
         ))}
@@ -63,11 +73,12 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
       <p>Size filter: {sizePolicyLabel(matching)}. Applies to the next scan.</p>
       <p className="matching-notice">
         Thresholds apply at match time, on the next match run. Existing groups reflect the last
-        completed match run. Frame count and sampling timeout apply when videos are sampled.
+        completed match run. Frame count and sampling timeout apply when videos are sampled; the
+        fingerprinting timeout applies when audio is decoded.
       </p>
       <p>
-        No AI or neural methods are used. Matching runs entirely locally: content hashes and
-        perceptual dHash comparisons.
+        No AI or neural methods are used. Matching runs entirely locally: content hashes, perceptual
+        dHash comparisons, and Chromaprint audio fingerprints.
       </p>
       <details>
         <summary>How matching works</summary>

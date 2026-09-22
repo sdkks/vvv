@@ -21,7 +21,7 @@ it('migrates once, applies writer pragmas and persists settings across reopen', 
   expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
   expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
   expect(db.pragma('synchronous', { simple: true })).toBe(1);
-  expect(db.pragma('user_version', { simple: true })).toBe(7);
+  expect(db.pragma('user_version', { simple: true })).toBe(8);
   expect(
     db.prepare("SELECT * FROM settings WHERE key LIKE '%file_size_mb' ORDER BY key").all()
   ).toEqual([
@@ -44,7 +44,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
     INSERT INTO settings VALUES ('retained', 'yes'); PRAGMA user_version=1`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(7);
+  expect(db.pragma('user_version', { simple: true })).toBe(8);
   expect(db.prepare("SELECT value FROM settings WHERE key='retained'").get()).toEqual({
     value: 'yes',
   });
@@ -79,12 +79,26 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
       "INSERT INTO files(scan_dir_id,rel_path,kind,size,mtime_ns) VALUES (999,'x.jpg','image',1,1)"
     )
   ).toThrow(/FOREIGN KEY/);
+  db.exec("UPDATE files SET kind='audio' WHERE rel_path='x.jpg'");
+  db.prepare('INSERT INTO audio_subfingerprints(file_id,idx,value) VALUES (1,0,4294967295)').run();
+  expect(() =>
+    db.prepare('INSERT INTO audio_subfingerprints(file_id,idx,value) VALUES (1,0,1)').run()
+  ).toThrow(/PRIMARY KEY|UNIQUE/);
+  expect(() =>
+    db.prepare('INSERT INTO audio_subfingerprints(file_id,idx,value) VALUES (1,1,-1)').run()
+  ).toThrow(/CHECK/);
   db.close();
   const reopened = openDatabase(directory).db;
-  expect(reopened.pragma('user_version', { simple: true })).toBe(7);
+  expect(reopened.pragma('user_version', { simple: true })).toBe(8);
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 1 });
   reopened.exec('DELETE FROM scan_dirs WHERE id=1');
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 0 });
+  expect(reopened.prepare('SELECT count(*) AS n FROM audio_subfingerprints').get()).toEqual({
+    n: 0,
+  });
+  expect(
+    reopened.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'idx_audio_%'").all()
+  ).toEqual([{ name: 'idx_audio_subfingerprints_value' }]);
   reopened.close();
 });
 
@@ -98,7 +112,7 @@ it('upgrades an existing scanned catalog and creates match indexes and cascading
     VALUES (1,'retained.jpg','image',10,0,'done','hash'); PRAGMA user_version=3`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(7);
+  expect(db.pragma('user_version', { simple: true })).toBe(8);
   expect(db.prepare('SELECT rel_path,status,sha256 FROM files').get()).toEqual({
     rel_path: 'retained.jpg',
     status: 'done',

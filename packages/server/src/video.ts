@@ -58,8 +58,8 @@ export class VideoFailure extends Error {
   }
 }
 
-type Options = { timeout: number; signal?: AbortSignal };
-async function child(
+export type Options = { timeout: number; signal?: AbortSignal };
+export async function child(
   program: string,
   args: string[],
   options: Options,
