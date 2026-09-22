@@ -11,7 +11,7 @@ import type {
   StartScanResponse,
   ScanErrorsResponse,
   Settings,
-  RetentionSettings,
+  UpdateSettingsResponse,
   UpdateSettingsRequest,
   QuarantineResponse,
   RestoreResponse,
@@ -21,6 +21,12 @@ import type {
 } from '@vvv/shared';
 
 export class ThumbnailUnavailableError extends Error {}
+
+export class SettingsValidationError extends Error {
+  constructor(public fields: Record<string, string>) {
+    super('Check the matching values and try again.');
+  }
+}
 
 export class ResultsChangedError extends Error {
   constructor() {
@@ -60,7 +66,18 @@ async function request(path: string, init?: RequestInit) {
     if (response.status === 409 && code === 'stale_cursor') throw new ResultsChangedError();
     if (response.status === 404 && code === 'thumbnail_not_found')
       throw new ThumbnailUnavailableError('No thumbnail available');
+    if (code === 'invalid_settings' && body && typeof body === 'object' && 'fields' in body) {
+      const fields = body.fields;
+      if (fields && typeof fields === 'object')
+        throw new SettingsValidationError(
+          Object.fromEntries(Object.entries(fields).filter((entry) => typeof entry[1] === 'string'))
+        );
+    }
     const messages: Record<string, string> = {
+      settings_scan_running:
+        'Wait for the current scan to finish before changing frames per video.',
+      settings_match_running:
+        'Wait for matching to finish before changing thresholds or frame count.',
       match_running: 'Matching is already running. Try again shortly.',
       scan_running: 'A scan is already running. Refresh to see its progress.',
       directory_registered: 'This directory is already registered.',
@@ -110,7 +127,7 @@ const jsonBody = (method: string, body: object): RequestInit => ({
 });
 export const getSettings = () => api<Settings>('/settings');
 export const updateSettings = (body: UpdateSettingsRequest) =>
-  api<RetentionSettings>('/settings', jsonBody('PATCH', body));
+  api<UpdateSettingsResponse>('/settings', jsonBody('PATCH', body));
 export const getTrash = (cursor = '') =>
   api<Page<TrashItem>>(`/trash?${new URLSearchParams({ cursor, limit: '50' })}`);
 export const quarantineFiles = (file_ids: number[]) =>

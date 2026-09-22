@@ -132,10 +132,7 @@ it('strictly rejects invalid settings without partial writes', async () => {
     { active_match_run: '2' },
     { matching },
     { retention_days: 2, matching },
-    { image_phash_threshold: 4 },
-    { video_phash_threshold: 8 },
-    { video_frame_count: 3 },
-    { video_timeout_ms: 90000 },
+
     { retention_days: 2, auto_purge_enabled: true, unknown: false },
   ]) {
     expect((await update(payload)).statusCode, JSON.stringify(payload)).toBe(400);
@@ -148,10 +145,14 @@ it('round-trips partial updates and boundaries through persistent storage after 
   expect((await update({ retention_days: 1 })).json<Settings>()).toEqual({
     retention_days: 1,
     auto_purge_enabled: false,
+    matching,
+    consequences: [],
   });
   expect((await update({ auto_purge_enabled: true })).json<Settings>()).toEqual({
     retention_days: 1,
     auto_purge_enabled: true,
+    matching,
+    consequences: [],
   });
   expect((await update({ retention_days: 3650 })).statusCode).toBe(200);
   await app.close();
@@ -164,6 +165,8 @@ it('round-trips partial updates and boundaries through persistent storage after 
   expect((await update({ auto_purge_enabled: false })).json<Settings>()).toEqual({
     retention_days: 3650,
     auto_purge_enabled: false,
+    matching,
+    consequences: [],
   });
   expect(db.prepare('SELECT * FROM file_operations').all()).toEqual([]);
 });

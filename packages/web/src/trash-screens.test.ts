@@ -120,6 +120,21 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(section).toContain('Existing groups reflect the last completed match run');
   expect(section).not.toMatch(/<(input|select|button|form)\b/);
 });
+it('keeps matching controls in a separate disclosure with labels, units, discard and save states', () => {
+  const html = render(Settings);
+  expect(html.indexOf('Matching behavior')).toBeLessThan(
+    html.indexOf('Advanced matching controls')
+  );
+  expect(html.indexOf('Advanced matching controls')).toBeLessThan(html.indexOf('Retention days'));
+  expect(html).toContain('<summary>Advanced matching controls</summary>');
+  expect(html).toContain('Sampling timeout (seconds) (10–3600)');
+  expect(html).toContain('value="600"');
+  expect(html).toContain('<button disabled="">Save matching controls</button>');
+  expect(html).toContain('Discard changes');
+  expect(html).toContain('Matching controls match saved values');
+  expect(html).toContain('role="status" aria-live="polite"');
+  expect(html).toContain('not SHA-256 checkpoints');
+});
 it('shows Current badges independently for customized thresholds and sampling values', () => {
   const html = render(Settings, [], {
     ...policy,

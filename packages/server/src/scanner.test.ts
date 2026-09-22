@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { Scanner } from './scanner.js';
 import { Quarantine } from './quarantine.js';
+import { settingsRoutes } from './routes/settings.js';
 import * as hashing from './hashing.js';
 import * as video from './video.js';
 
@@ -708,6 +709,64 @@ it('backfills videos from an exact-only catalog without rehashing and applies se
     signal: expect.any(AbortSignal),
   });
   expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 3 });
+});
+
+it('re-samples after a frame-count PATCH without repeating SHA and uses the saved timeout', async () => {
+  seed();
+  await put('clip.mp4');
+  await put('image.jpg');
+  await scan();
+  const route = Fastify({ ajv: { customOptions: { coerceTypes: false } } });
+  settingsRoutes(route, db);
+  try {
+    const response = await route.inject({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: {
+        video_frame_count: 3,
+        video_timeout_ms: 10000,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    hash.mockClear();
+    vi.mocked(hashing.imageHash).mockClear();
+    const decode = vi.mocked(video.videoHash).mockResolvedValue({
+      hashes: Array.from({ length: 3 }, () => Buffer.alloc(8)),
+      width: 320,
+      height: 240,
+      duration: 2,
+      duration_ms: 2000,
+    });
+    await scan();
+    expect(hash).not.toHaveBeenCalled();
+    expect(hashing.imageHash).not.toHaveBeenCalled();
+    expect(decode).toHaveBeenLastCalledWith(join(media, 'clip.mp4'), 3, {
+      timeout: 10000,
+      signal: expect.any(AbortSignal),
+    });
+    expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 4 });
+    expect(files().every((f) => (f as { status: string }).status === 'done')).toBe(true);
+    decode.mockClear();
+    expect(
+      (
+        await route.inject({
+          method: 'PATCH',
+          url: '/api/settings',
+          payload: { video_timeout_ms: 20000 },
+        })
+      ).statusCode
+    ).toBe(200);
+    await scan();
+    expect(decode).not.toHaveBeenCalled();
+    await put('new.mp4');
+    await scan();
+    expect(decode).toHaveBeenLastCalledWith(join(media, 'new.mp4'), 3, {
+      timeout: 20000,
+      signal: expect.any(AbortSignal),
+    });
+  } finally {
+    await route.close();
+  }
 });
 
 it('cancels traversal before the missing sweep and drains cleanly on close', async () => {

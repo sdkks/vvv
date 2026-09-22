@@ -5,6 +5,7 @@ import { getSettings, updateSettings } from './api';
 import { policySummary, validRetention } from './trash-state';
 import { PageHeading } from './PageHeading';
 import { MatchingBehavior } from './MatchingBehavior';
+import { AdvancedMatching } from './AdvancedMatching';
 
 export function Settings() {
   const cache = useQueryClient();
@@ -31,6 +32,7 @@ export function Settings() {
         </p>
       )}
       {query.data && <MatchingBehavior matching={query.data.matching} />}
+      {query.data && <AdvancedMatching matching={query.data.matching} />}
       {query.data && <p>{policySummary(query.data)}</p>}
       {policy && (
         <form

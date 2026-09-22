@@ -238,6 +238,14 @@ summary {
   color: #182230;
   font-size: 0.85rem;
 }
+.matching-field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.matching-field input {
+  width: 100%;
+}
 .matching-notice {
   border-left: 3px solid #194b88;
   padding: 0.75rem;
