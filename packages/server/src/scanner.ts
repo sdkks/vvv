@@ -277,7 +277,7 @@ export class Scanner {
                       path,
                       mediaSetting(this.db, 'video_frame_count', 9, 64),
                       {
-                        timeout: mediaSetting(this.db, 'video_timeout_ms', 120000, 2147483647),
+                        timeout: mediaSetting(this.db, 'video_timeout_ms', 600000, 2147483647),
                         signal: this.abort.signal,
                       }
                     );

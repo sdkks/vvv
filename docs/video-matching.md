@@ -19,7 +19,7 @@ is approximate, and hot buckets are skipped and reported. Partial clips, cropped
 content, and different timelines are not promised matches.
 
 The database settings `video_frame_count`, `video_timeout_ms`, and
-`video_phash_threshold` default to 9, 120000 ms, and 10 respectively. They are not
+`video_phash_threshold` default to 9, 600000 ms, and 10 respectively. They are not
 exposed in the UI. Video thumbnails seek to the middle timestamp, extract one JPEG,
 and use the existing source-identity cache. Unavailable content returns 404;
 operational failures return logged 500 responses. Thumbnail access requires login.
