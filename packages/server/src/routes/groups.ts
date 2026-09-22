@@ -26,7 +26,7 @@ function decode(value: string): [number, string, number, number] | null {
     if (
       Array.isArray(row) &&
       row.length === 4 &&
-      ['*', 'exact', 'image', 'video'].includes(row[1]) &&
+      ['*', 'exact', 'image', 'video', 'audio_partial'].includes(row[1]) &&
       [0, 2, 3].every((i) => Number.isSafeInteger(row[i]) && row[i] >= 0)
     )
       return row as [number, string, number, number];
@@ -51,7 +51,7 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
           additionalProperties: false,
           properties: {
             ...pageProperties,
-            kind: { type: 'string', enum: ['exact', 'image', 'video'] },
+            kind: { type: 'string', enum: ['exact', 'image', 'video', 'audio_partial'] },
           },
         },
       },
@@ -104,9 +104,18 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
     },
     async (request, reply) => {
       const group = db
-        .prepare(`SELECT ${fields} FROM dup_groups WHERE id=? AND match_run=?`)
-        .get(request.params.id, activeMatchRun(db)) as DuplicateGroup | undefined;
+        .prepare(
+          `SELECT ${fields},subset_file_id,offset_seconds FROM dup_groups WHERE id=? AND match_run=?`
+        )
+        .get(request.params.id, activeMatchRun(db)) as
+        | (DuplicateGroup & {
+            subset_file_id: number | null;
+            offset_seconds: number | null;
+          })
+        | undefined;
       if (!group) return reply.code(404).send({ error: 'group_not_found' });
+      const { subset_file_id: subsetId, offset_seconds: offset, ...summary } = group;
+      const directional = summary.kind === 'audio_partial';
       const limit = Math.min(Number(request.query.limit ?? 100), 500);
       const rows = db
         .prepare(
@@ -121,9 +130,15 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
         ...row,
         path: join(row.path, rel_path),
         quarantined: false as const,
+        ...(directional
+          ? {
+              role: row.file_id === subsetId ? ('subset' as const) : ('superset' as const),
+              offset_seconds: offset,
+            }
+          : {}),
       }));
       return {
-        ...group,
+        ...summary,
         members: { items, next_cursor: rows.length > limit ? String(items.at(-1)?.file_id) : null },
       } satisfies GroupResponse;
     }

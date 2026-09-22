@@ -80,14 +80,7 @@ export interface ScanProgressEvent {
   data: ScanProgress;
 }
 export type ScanLogLevel = 'info' | 'warn' | 'error';
-export type ScanLogStep =
-  | 'scan'
-  | 'traversal'
-  | 'hash'
-  | 'sample'
-  | 'match'
-  | 'error'
-  | 'complete';
+export type ScanLogStep = 'scan' | 'traversal' | 'hash' | 'sample' | 'match' | 'error' | 'complete';
 export interface ScanLogEntry {
   /** Monotonically increasing within a server run; doubles as history cursor and SSE event id. */
   id: number;
@@ -109,7 +102,7 @@ export interface ScanErrorsResponse {
   items: ScanError[];
   next_cursor: string | null;
 }
-export type GroupKind = 'exact' | 'image' | 'video';
+export type GroupKind = 'exact' | 'image' | 'video' | 'audio_partial';
 export interface StartMatchResponse {
   match_run: number;
 }
@@ -137,6 +130,10 @@ export interface GroupMember {
   duration_ms: number | null;
   similarity: number | null;
   quarantined: false;
+  /** This member's side of a directional audio_partial relation; absent for other kinds. */
+  role?: 'subset' | 'superset';
+  /** Seconds into the superset where the subset begins; audio_partial groups only. */
+  offset_seconds?: number | null;
 }
 export type GroupsResponse = Page<DuplicateGroup>;
 export interface GroupResponse extends DuplicateGroup {

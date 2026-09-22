@@ -7,7 +7,9 @@ export const isVideo = (path: string) =>
   /\.(mp4|mkv|avi|mov|webm|m4v|mpg|mpeg|ts|m2ts|wmv|flv)$/i.test(path);
 export const groupsKey = (kind: KindFilter, cursor = '') => ['groups', 'list', kind, cursor];
 export function kindFilter(value: string | null): KindFilter {
-  return value === 'exact' || value === 'image' || value === 'video' ? value : '';
+  return value === 'exact' || value === 'image' || value === 'video' || value === 'audio_partial'
+    ? value
+    : '';
 }
 export function visitCursor(history: string[], current: string, next: string) {
   if (!next) return [''];

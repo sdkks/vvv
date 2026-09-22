@@ -21,7 +21,12 @@ it('migrates once, applies writer pragmas and persists settings across reopen', 
   expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
   expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
   expect(db.pragma('synchronous', { simple: true })).toBe(1);
-  expect(db.pragma('user_version', { simple: true })).toBe(8);
+  expect(db.pragma('user_version', { simple: true })).toBe(9);
+  expect(db.prepare("SELECT * FROM settings WHERE key LIKE 'audio_%' ORDER BY key").all()).toEqual([
+    { key: 'audio_candidate_min_shared', value: '4' },
+    { key: 'audio_confidence_threshold', value: '50' },
+    { key: 'audio_min_subset_seconds', value: '5' },
+  ]);
   expect(
     db.prepare("SELECT * FROM settings WHERE key LIKE '%file_size_mb' ORDER BY key").all()
   ).toEqual([
@@ -44,7 +49,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
     INSERT INTO settings VALUES ('retained', 'yes'); PRAGMA user_version=1`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(8);
+  expect(db.pragma('user_version', { simple: true })).toBe(9);
   expect(db.prepare("SELECT value FROM settings WHERE key='retained'").get()).toEqual({
     value: 'yes',
   });
@@ -89,7 +94,7 @@ it('upgrades the original schema and creates the scan indexes and foreign keys',
   ).toThrow(/CHECK/);
   db.close();
   const reopened = openDatabase(directory).db;
-  expect(reopened.pragma('user_version', { simple: true })).toBe(8);
+  expect(reopened.pragma('user_version', { simple: true })).toBe(9);
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 1 });
   reopened.exec('DELETE FROM scan_dirs WHERE id=1');
   expect(reopened.prepare('SELECT count(*) AS n FROM files').get()).toEqual({ n: 0 });
@@ -112,7 +117,7 @@ it('upgrades an existing scanned catalog and creates match indexes and cascading
     VALUES (1,'retained.jpg','image',10,0,'done','hash'); PRAGMA user_version=3`);
   original.close();
   const { db } = openDatabase(directory);
-  expect(db.pragma('user_version', { simple: true })).toBe(8);
+  expect(db.pragma('user_version', { simple: true })).toBe(9);
   expect(db.prepare('SELECT rel_path,status,sha256 FROM files').get()).toEqual({
     rel_path: 'retained.jpg',
     status: 'done',
@@ -136,6 +141,19 @@ it('upgrades an existing scanned catalog and creates match indexes and cascading
     INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run) VALUES ('exact',2,20,10,1);
     INSERT INTO dup_group_members(group_id,file_id) VALUES (1,1)`);
   expect(() => db.exec('INSERT INTO dup_group_members VALUES (1,99,NULL)')).toThrow(/FOREIGN KEY/);
+  db.exec(`INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run,
+    subset_file_id,offset_seconds) VALUES ('audio_partial',2,20,10,1,1,3)`);
+  expect(() =>
+    db.exec(
+      `INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run,subset_file_id)
+      VALUES ('audio_partial',2,20,10,1,99)`
+    )
+  ).toThrow(/FOREIGN KEY/);
+  // Purging the subset file dissolves its directional group through the cascade.
+  db.exec('DELETE FROM files WHERE id=1');
+  expect(
+    db.prepare("SELECT count(*) AS n FROM dup_groups WHERE kind='audio_partial'").get()
+  ).toEqual({ n: 0 });
   db.exec('DELETE FROM scan_dirs WHERE id=1');
   expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 0 });
   expect(db.pragma('foreign_key_check')).toEqual([]);

@@ -254,7 +254,7 @@ export function GroupDetail({
           >
             <Thumbnail member={member} />
             <div>
-              {index === 0 && (
+              {index === 0 && !member.role && (
                 <strong title="Similarity is measured against this member; it is not necessarily the best copy.">
                   Reference
                 </strong>
@@ -268,11 +268,15 @@ export function GroupDetail({
                 {member.duration_ms !== null && ` · ${formatDuration(member.duration_ms)}`}
               </p>
               <p className="comparison">
-                {member.similarity === null
-                  ? 'Exact copy'
-                  : index > 0
-                    ? `Distance from reference: ${member.similarity}`
-                    : null}
+                {member.role
+                  ? member.role === 'subset'
+                    ? `Subset — starts at ${member.offset_seconds} s · audio alignment ${member.similarity}%`
+                    : `Contains the subset at ${member.offset_seconds} s · audio alignment ${member.similarity}%`
+                  : member.similarity === null
+                    ? 'Exact copy'
+                    : index > 0
+                      ? `Distance from reference: ${member.similarity}`
+                      : null}
               </p>
               <button
                 disabled={apply.isPending}

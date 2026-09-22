@@ -12,6 +12,13 @@ const defaults = {
   audio_timeout_ms: { value: 600000, min: 1, max: 2147483647 },
   min_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
   max_file_size_mb: { value: 0, min: 0, max: Number.MAX_SAFE_INTEGER },
+  // Partial-matching tunables: not exposed through the settings API (raw tuning stays
+  // out of the surface by decision), only seeded and read from the settings table. The
+  // shared-value floor is low by calibration: re-encoded ten-second trims keep only a
+  // handful of exact subfingerprint values, and 32-bit collisions make weak filters safe.
+  audio_candidate_min_shared: { value: 4, min: 1, max: 100000 },
+  audio_confidence_threshold: { value: 50, min: 1, max: 100 },
+  audio_min_subset_seconds: { value: 5, min: 0, max: 86400 },
 };
 
 export function numericSetting(

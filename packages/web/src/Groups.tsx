@@ -154,6 +154,7 @@ export function Groups() {
             <option value="exact">Exact</option>
             <option value="image">Image</option>
             <option value="video">Video</option>
+            <option value="audio_partial">Audio partial</option>
           </select>
         </label>
         <button

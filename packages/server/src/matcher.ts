@@ -4,9 +4,10 @@ import type { ScanLog } from './scan-log.js';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { hamming } from './hashing.js';
 import { matchPerceptual } from './perceptual-matcher.js';
+import { matchPartialAudio } from './partial-matcher.js';
 
 type Candidate = { size: number; sha256: string };
-function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
+export function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
   db.prepare(
     `DELETE FROM dup_group_members AS m WHERE group_id=? AND EXISTS (
     SELECT 1 FROM files f WHERE f.id=m.file_id
@@ -27,6 +28,15 @@ function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
     WHERE group_id=? AND EXISTS (SELECT 1 FROM dup_groups WHERE id=? AND kind IN ('image','video'))`
   ).run(id, id);
 }
+/**
+ * Refresh every group a file belongs to after its status changed. Directional
+ * audio_partial groups hold exactly the two members of a subset/superset relation and
+ * dissolve under the same rule as every other kind: a quarantined or re-scanned member
+ * stops counting toward member_count, which drops a two-member group below two and
+ * deletes it. That is the intended directional semantics — a clip without its source
+ * is not actionable, and neither is a source whose clip is gone. Groups come back when
+ * the next match run re-verifies the restored pair.
+ */
 export function refreshFileGroups(db: Database.Database, fileId: number) {
   let after = 0;
   for (;;) {
@@ -208,8 +218,18 @@ export class Matcher {
         kindMs
       );
     }
+    const audioStart = Date.now();
+    const audio = await matchPartialAudio(db, id, (groupId) => refreshGroup(db, groupId));
+    this.log.info({ match_run: id, ...audio }, 'Audio partial matching finished');
+    this.logs?.add(
+      scanId,
+      'info',
+      'match',
+      `Audio partial matching: ${audio.candidate_pairs} candidates, ${audio.hot_values} over-common values — run ${id}`,
+      Date.now() - audioStart
+    );
     db.prepare('UPDATE match_runs SET candidate_pairs=?,skipped_buckets=? WHERE id=?').run(
-      stats.reduce((sum, result) => sum + result.candidate_pairs, 0),
+      stats.reduce((sum, result) => sum + result.candidate_pairs, 0) + audio.candidate_pairs,
       JSON.stringify(stats.flatMap((result) => result.skipped_buckets)),
       id
     );
