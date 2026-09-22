@@ -38,6 +38,10 @@ RUN set -eu; \
 FROM docker.io/library/node:22-trixie-slim@sha256:c5849ff9c9ebcd66615412f0b548ca5b8ecaef84003dc9ac2e077ebe46aaa3f6
 ENV NODE_ENV=production DATA_DIR=/data SERVE_WEB_DIST=/app/web PORT=8080
 WORKDIR /app
+# fpcalc (chromaprint) powers audio fingerprinting alongside ffmpeg/ffprobe.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libchromaprint-tools \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=media /ffmpeg/bin/ffmpeg /ffmpeg/bin/ffprobe /usr/local/bin/
 COPY --from=media /ffmpeg/LICENSE.txt /usr/local/share/licenses/ffmpeg/LICENSE.txt
 COPY --from=build /runtime/node_modules ./node_modules

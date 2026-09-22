@@ -1,7 +1,7 @@
 # Deploying VVV with podman
 
 VVV ships as a single OCI image containing the API server, the built web UI, and
-ffmpeg/ffprobe. This project uses **podman**, not docker, as its container runtime.
+ffmpeg/ffprobe/fpcalc. This project uses **podman**, not docker, as its container runtime.
 
 ## Prerequisites
 
@@ -20,6 +20,8 @@ sets the healthcheck explicitly. The image builds natively for amd64 or arm64 on
 Debian trixie (glibc). It includes
 BtbN ffmpeg/ffprobe 8.1 builds from the retained `autobuild-2026-08-31-13-27` tag;
 both architecture checksums are baked into `Dockerfile` and verified before extraction.
+Audio fingerprinting uses Chromaprint's fpcalc from trixie's `libchromaprint-tools`
+package (plus the FFmpeg decode libraries it links), adding roughly 140 MB to the image.
 No host Node or ffmpeg installation is needed. If those artifacts become unavailable,
 the documented alternative is trixie's ffmpeg 7.1.x package, not bookworm's older 5.1;
 the build deliberately fails rather than silently switching sources.
