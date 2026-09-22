@@ -18,6 +18,7 @@ import { MediaWork } from './video.js';
 import { Quarantine } from './quarantine.js';
 import { reconcile } from './reconcile.js';
 import { trashRoutes } from './routes/trash.js';
+import { settingsRoutes } from './routes/settings.js';
 
 export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
@@ -61,6 +62,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   exportRoutes(app, openReadOnly);
   thumbnailRoutes(app, db, config.dataDir, media);
   trashRoutes(app, db, quarantine);
+  settingsRoutes(app, db);
   app.get('/api/health', async (): Promise<HealthResponse> => {
     db.prepare('SELECT 1').get();
     return { status: 'ok', db: 'ok' };

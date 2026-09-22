@@ -47,8 +47,12 @@ button:disabled {
 [role='alert'] {
   color: #a21b1b;
 }
-p {
+p,
+.scan-option span {
   overflow-wrap: anywhere;
+}
+.member-card > div {
+  min-width: 0;
 }
 a {
   color: #194b88;

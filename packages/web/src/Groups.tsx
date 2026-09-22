@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QuarantineResponse } from '@vvv/shared';
 import { getGroups, groupsSearch, ResultsChangedError, runMatching } from './api';
+import { UndoToast } from './UndoToast';
 import {
   formatBytes,
   groupsKey,
   kindFilter,
+  nextGroup,
   previousCursor,
   recoverGroups,
   visitCursor,
@@ -21,6 +24,8 @@ export function Groups() {
   const [notice, setNotice] = useState('');
   const [observing, setObserving] = useState<string | null>(null);
   const location = useLocation();
+  const [toast, setToast] = useState<{ ids: number[]; path: string }>();
+  const route = location.pathname + location.search;
   const recovering = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const navigate = useNavigate();
@@ -52,8 +57,9 @@ export function Groups() {
   }, [id, query.error, onStale]);
   useEffect(() => {
     setObserving(null);
+    setToast((current) => (current?.path === route ? current : undefined));
     if (!id) heading.current?.focus();
-  }, [location.key, id]);
+  }, [location.key, id, route]);
   useEffect(() => {
     if (observing !== location.key) return;
     let attempts = 0;
@@ -76,19 +82,60 @@ export function Groups() {
     setHistory(visitCursor(history, cursor, next));
     void navigate(`/groups${groupsSearch(kind, next)}`);
   }
+  const applied = useCallback(
+    async (result: QuarantineResponse) => {
+      await cache.invalidateQueries({ queryKey: ['groups'], refetchType: 'none' });
+      await cache.invalidateQueries({ queryKey: ['trash'] });
+      if (window.location.pathname + window.location.search !== route) return;
+      const ids = result.moved.map((item) => item.trash_id);
+      if (ids.length) setToast({ ids, path: route });
+      if (result.failed.length) return;
+      let position = cursor;
+      let fresh = await cache.fetchQuery({
+        queryKey: groupsKey(kind, position),
+        queryFn: () => getGroups(kind, position),
+      });
+      let next = nextGroup(fresh.items, Number(id), query.data?.items, false);
+      const fallback = nextGroup(fresh.items, Number(id), query.data?.items);
+      if (!next && fresh.next_cursor) {
+        position = fresh.next_cursor;
+        fresh = await cache.fetchQuery({
+          queryKey: groupsKey(kind, position),
+          queryFn: () => getGroups(kind, position),
+        });
+        next = nextGroup(fresh.items, Number(id));
+      }
+      if (!next) {
+        next = fallback;
+        position = cursor;
+      }
+      if (window.location.pathname + window.location.search !== route) return;
+      const target = `/groups${next ? `/${next.id}` : ''}${groupsSearch(kind, position)}`;
+      setHistory(visitCursor(history, cursor, position));
+      if (ids.length) setToast({ ids, path: target });
+      await navigate(target);
+    },
+    [cache, cursor, history, id, kind, navigate, route, query.data]
+  );
   const previous = previousCursor(history, cursor);
   const next = query.data?.next_cursor ?? undefined;
+  const undo = toast?.path === route && <UndoToast key={toast.ids.join(',')} ids={toast.ids} />;
   if (id)
     return (
-      <GroupDetail
-        key={id}
-        id={id}
-        back={`/groups${groupsSearch(kind, cursor)}`}
-        onStale={onStale}
-      />
+      <>
+        {undo}
+        <GroupDetail
+          key={id}
+          id={id}
+          back={`/groups${groupsSearch(kind, cursor)}`}
+          onStale={onStale}
+          onApplied={applied}
+        />
+      </>
     );
   return (
     <>
+      {undo}
       <h1 ref={heading} tabIndex={-1}>
         Duplicate groups
       </h1>

@@ -7,6 +7,8 @@ import { api, returnLocation } from './api';
 import { Groups } from './Groups';
 import { Directories } from './Directories';
 import { Scan } from './Scan';
+import { Trash } from './Trash';
+import { Settings } from './Settings';
 
 function Login() {
   const [error, setError] = useState('');
@@ -92,6 +94,8 @@ function Shell() {
         <NavLink to="/directories">Directories</NavLink>
         <NavLink to="/scan">Scan</NavLink>
         <NavLink to="/groups">Groups</NavLink>
+        <NavLink to="/trash">Trash</NavLink>
+        <NavLink to="/settings">Settings</NavLink>
       </nav>
       <Outlet />
     </>
@@ -122,6 +126,8 @@ export function App() {
           <Route path="/groups/:id?" element={<Groups />} />
           <Route path="/directories" element={<Directories />} />
           <Route path="/scan" element={<Scan />} />
+          <Route path="/trash" element={<Trash />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Home />} />
         </Route>
       </Routes>

@@ -10,6 +10,13 @@ import type {
   CurrentScanResponse,
   StartScanResponse,
   ScanErrorsResponse,
+  Settings,
+  UpdateSettingsRequest,
+  QuarantineResponse,
+  RestoreResponse,
+  PurgeResponse,
+  Page,
+  TrashItem,
 } from '@vvv/shared';
 
 export class ThumbnailUnavailableError extends Error {}
@@ -19,6 +26,8 @@ export class ResultsChangedError extends Error {
     super('Results changed — a new match completed');
   }
 }
+
+export class GroupMissingError extends ResultsChangedError {}
 
 export function returnLocation(search: string, origin: string) {
   const target = new URLSearchParams(search).get('returnTo') ?? '/';
@@ -46,11 +55,8 @@ async function request(path: string, init?: RequestInit) {
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
     const code = body && typeof body === 'object' && 'error' in body ? body.error : null;
-    if (
-      (response.status === 409 && code === 'stale_cursor') ||
-      (response.status === 404 && code === 'group_not_found')
-    )
-      throw new ResultsChangedError();
+    if (response.status === 404 && code === 'group_not_found') throw new GroupMissingError();
+    if (response.status === 409 && code === 'stale_cursor') throw new ResultsChangedError();
     if (response.status === 404 && code === 'thumbnail_not_found')
       throw new ThumbnailUnavailableError('No thumbnail available');
     const messages: Record<string, string> = {
@@ -93,6 +99,17 @@ const jsonBody = (method: string, body: object): RequestInit => ({
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
+export const getSettings = () => api<Settings>('/settings');
+export const updateSettings = (body: UpdateSettingsRequest) =>
+  api<Settings>('/settings', jsonBody('PATCH', body));
+export const getTrash = (cursor = '') =>
+  api<Page<TrashItem>>(`/trash?${new URLSearchParams({ cursor, limit: '50' })}`);
+export const quarantineFiles = (file_ids: number[]) =>
+  api<QuarantineResponse>('/files/quarantine', jsonBody('POST', { file_ids }));
+export const restoreTrash = (trash_ids: number[]) =>
+  api<RestoreResponse>('/trash/restore', jsonBody('POST', { trash_ids }));
+export const purgeTrash = (trash_ids: number[]) =>
+  api<PurgeResponse>('/trash/purge', jsonBody('POST', { trash_ids }));
 export const getScanDirs = (signal?: AbortSignal) =>
   api<ScanDirsResponse>('/scan-dirs', { signal });
 export const addScanDir = (body: CreateScanDirRequest) =>

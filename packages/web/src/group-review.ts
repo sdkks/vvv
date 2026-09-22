@@ -1,5 +1,6 @@
+import type { DuplicateGroup } from '@vvv/shared';
 import type { QueryClient } from '@tanstack/react-query';
-import { getGroups, type KindFilter } from './api';
+import { getGroups, GroupMissingError, ResultsChangedError, type KindFilter } from './api';
 
 // Members omit kind; mirror the scanner's extension-based video classification.
 export const isVideo = (path: string) =>
@@ -34,6 +35,20 @@ export function toggleMarked(marked: Set<number>, id: number) {
   else next.add(id);
   return next;
 }
+
+export type ApplyRecovery = 'advance' | 'stale' | 'none';
+/** Decides recovery after a quarantined apply, before any failed-item rendering:
+ * a dissolved group refetch (404) advances, a stale generation (409) restarts
+ * browsing, and only then do partial failures keep the user on the group. */
+export function applyRecovery(
+  queryError: unknown,
+  apply: { isPending: boolean; failedCount: number }
+): ApplyRecovery {
+  if (queryError instanceof GroupMissingError) return 'advance';
+  if (queryError instanceof ResultsChangedError) return 'stale';
+  void apply;
+  return 'none';
+}
 export function reviewShortcut(
   key: string,
   target: { tagName?: string; isContentEditable?: boolean },
@@ -52,6 +67,16 @@ export function reviewShortcut(
   if (key === 'x' || key === ' ') return 'toggle';
   if (key === 'Enter') return 'apply';
   return key === 'Escape' ? 'back' : null;
+}
+export function nextGroup(items: DuplicateGroup[], current: number, before = items, wrap = true) {
+  const index = before.findIndex((item) => item.id === current);
+  const ordered = [
+    ...before.slice(index + 1),
+    ...(wrap ? [...before.slice(0, index + 1), ...items] : []),
+  ];
+  return ordered
+    .map((old) => items.find((item) => item.id === old.id))
+    .find((item) => item && item.id !== current && item.member_count >= 2);
 }
 export function formatBytes(bytes: number) {
   const unit = Math.min(4, Math.floor(Math.log(Math.max(1, bytes)) / Math.log(1024)));

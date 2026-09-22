@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { useInfiniteQuery } from '@tanstack/react-query';
-import type { GroupMember } from '@vvv/shared';
-import { getGroup, getThumbnail, ResultsChangedError, ThumbnailUnavailableError } from './api';
-import { formatBytes, formatDuration, reviewShortcut, toggleMarked } from './group-review';
+import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
+import type { GroupMember, QuarantineResponse } from '@vvv/shared';
+import {
+  getGroup,
+  getThumbnail,
+  quarantineFiles,
+  ResultsChangedError,
+  ThumbnailUnavailableError,
+} from './api';
+import { fileFailure } from './trash-state';
+import {
+  applyRecovery,
+  formatBytes,
+  formatDuration,
+  reviewShortcut,
+  toggleMarked,
+} from './group-review';
 
 function Thumbnail({ member }: { member: GroupMember }) {
   const [src, setSrc] = useState('');
@@ -49,10 +62,12 @@ export function GroupDetail({
   id,
   back,
   onStale,
+  onApplied,
 }: {
   id: string;
   back: string;
   onStale: () => void;
+  onApplied: (result: QuarantineResponse) => Promise<void>;
 }) {
   const query = useInfiniteQuery({
     queryKey: ['groups', 'detail', id],
@@ -63,14 +78,36 @@ export function GroupDetail({
   });
   const [marked, setMarked] = useState(new Set<number>());
   const [active, setActive] = useState(0);
+  const apply = useMutation({
+    mutationFn: () => quarantineFiles([...marked]),
+    onSuccess: async (result) => {
+      setMarked(new Set(result.failed.map((item) => item.file_id)));
+      await onApplied(result);
+      if (result.failed.length) await query.refetch();
+    },
+  });
   const list = useRef<HTMLUListElement>(null);
   const navigate = useNavigate();
   const group = query.data?.pages[0];
-  const members = query.data?.pages.flatMap((page) => page.members.items) ?? [];
+  const members = (query.data?.pages.flatMap((page) => page.members.items) ?? []).filter(
+    (member) =>
+      query.dataUpdatedAt > apply.submittedAt ||
+      !apply.data?.moved.some((item) => item.file_id === member.file_id)
+  );
   const loaded = Boolean(group);
   useEffect(() => {
-    if (query.error instanceof ResultsChangedError) onStale();
-  }, [query.error, onStale]);
+    // Recovery from generation-stale or vanished-group refetches must run even when
+    // the apply response carried per-item failures; otherwise the UI stays on a
+    // stale or dissolved group with errors rendered (FR-23).
+    const recovery = applyRecovery(query.error, {
+      isPending: apply.isPending,
+      failedCount: apply.data?.failed.length ?? 0,
+    });
+    if (recovery === 'advance') return void onApplied({ moved: [], failed: [] }).catch(onStale);
+    if (recovery === 'stale') return onStale();
+    if (apply.error instanceof ResultsChangedError) onStale();
+    if (apply.isPending || apply.data?.failed.length) return;
+  }, [query.error, onStale, onApplied, apply.isPending, apply.data, apply.error]);
   useEffect(() => {
     if (loaded) (list.current?.children[0] as HTMLElement | undefined)?.focus();
   }, [loaded]);
@@ -79,7 +116,13 @@ export function GroupDetail({
     (list.current?.children[next] as HTMLElement | undefined)?.focus();
   }
   function toggle(id = members[active]?.file_id) {
-    if (id !== undefined) setMarked((value) => toggleMarked(value, id));
+    if (id !== undefined && !apply.isPending) setMarked((value) => toggleMarked(value, id));
+  }
+  function confirmApply(trigger: HTMLElement) {
+    if (!marked.size || apply.isPending) return;
+    if (window.confirm(`Move ${marked.size} marked files to Trash? They remain restorable there.`))
+      apply.mutate();
+    else trigger.focus();
   }
   return (
     <section
@@ -95,6 +138,7 @@ export function GroupDetail({
         if (action === 'previous') focus(active - 1);
         if (action === 'toggle') toggle();
         if (action === 'back') void navigate(back);
+        if (action === 'apply') confirmApply(event.target as HTMLElement);
       }}
     >
       <Link to={back}>Back to groups</Link>
@@ -112,8 +156,7 @@ export function GroupDetail({
         </p>
       )}
       <p>
-        Shortcuts: j / ↓ next · k / ↑ previous · x / Space mark · Enter apply and advance
-        (unavailable) · Esc back
+        Shortcuts: j / ↓ next · k / ↑ previous · x / Space mark · Enter apply and advance · Esc back
       </p>
       <div className="toolbar">
         <button disabled={active === 0} onClick={() => focus(active - 1)}>
@@ -148,11 +191,19 @@ export function GroupDetail({
                 {member.duration_ms !== null && ` · ${formatDuration(member.duration_ms)}`}
               </p>
               <button
+                disabled={apply.isPending}
                 aria-pressed={marked.has(member.file_id)}
                 onClick={() => toggle(member.file_id)}
               >
                 {marked.has(member.file_id) ? 'Discard — marked' : 'Keep — not marked'}
               </button>
+              {apply.data?.failed
+                .filter((item) => item.file_id === member.file_id)
+                .map((item) => (
+                  <p role="alert" key={item.file_id}>
+                    {fileFailure(item.error)}
+                  </p>
+                ))}
             </div>
           </li>
         ))}
@@ -163,15 +214,17 @@ export function GroupDetail({
         </button>
       )}
       <div className="toolbar" aria-live="polite">
-        <button disabled title="Arriving in a future update" aria-describedby="apply-hint">
-          Quarantine {marked.size} marked files
+        <button
+          disabled={!marked.size || apply.isPending}
+          onClick={(event) => confirmApply(event.currentTarget)}
+        >
+          {apply.isPending ? 'Quarantining…' : `Quarantine ${marked.size} marked files`}
         </button>
-        <button onClick={() => setMarked(new Set())} disabled={!marked.size}>
+        <button onClick={() => setMarked(new Set())} disabled={!marked.size || apply.isPending}>
           Clear markings
         </button>
-        <small id="apply-hint">
-          Arriving in a future update — apply and advance is unavailable. No files will be moved.
-        </small>
+        <small>Quarantined files can be restored from Trash until permanently purged.</small>
+        {apply.isError && <p role="alert">{apply.error.message}</p>}
       </div>
     </section>
   );

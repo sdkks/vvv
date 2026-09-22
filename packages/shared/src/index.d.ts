@@ -102,6 +102,11 @@ export interface ExportGroup {
 export interface ExportResponse {
   groups: ExportGroup[];
 }
+export interface Settings {
+  retention_days: number;
+  auto_purge_enabled: boolean;
+}
+export type UpdateSettingsRequest = Partial<Settings>;
 export interface QuarantineResponse {
   moved: { file_id: number; trash_id: number }[];
   failed: { file_id: number; error: string }[];

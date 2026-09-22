@@ -1,9 +1,22 @@
-import { QueryClient } from '@tanstack/react-query';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter, Route, Routes } from 'react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { GroupsResponse, QuarantineResponse } from '@vvv/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, getThumbnail, ResultsChangedError, ThumbnailUnavailableError } from './api';
+import { Groups } from './Groups';
 import {
+  api,
+  getThumbnail,
+  GroupMissingError,
+  ResultsChangedError,
+  ThumbnailUnavailableError,
+} from './api';
+import {
+  applyRecovery,
   groupsKey,
   isVideo,
+  nextGroup,
   previousCursor,
   recoverGroups,
   reviewShortcut,
@@ -11,7 +24,149 @@ import {
   visitCursor,
 } from './group-review';
 
-afterEach(() => vi.unstubAllGlobals());
+const navigate = vi.hoisted(() => vi.fn());
+let applied: ((result: QuarantineResponse) => Promise<void>) | undefined;
+vi.mock('react-router', async (original) => ({
+  ...(await original<typeof import('react-router')>()),
+  useNavigate: () => navigate,
+}));
+vi.mock('./GroupDetail', () => ({
+  GroupDetail: (props: { onApplied: typeof applied }) => {
+    applied = props.onApplied;
+    return null;
+  },
+}));
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+  applied = undefined;
+});
+
+const groups = (...ids: number[]) =>
+  ids.map((id) => ({
+    id,
+    kind: 'exact' as const,
+    member_count: 2,
+    total_bytes: 10,
+    reclaimable_bytes: 5,
+  }));
+
+async function applyAtBoundary(
+  listResponse: GroupsResponse,
+  nextPage?: GroupsResponse,
+  cursor = '',
+  failures: { file_id: number; error: string }[] = [],
+  detailError?: Response
+) {
+  const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const search = `?kind=exact${cursor ? `&cursor=${cursor}` : ''}`;
+  vi.stubGlobal('window', { location: { pathname: '/groups/3', search } });
+  const responses: GroupsResponse[] = [listResponse, ...(nextPage ? [nextPage] : [])];
+  const fetch = vi.fn(async (url: string | URL) => {
+    const path = String(url);
+    if (path.includes('/api/files/quarantine'))
+      return Response.json({
+        moved: failures.length ? [] : [{ file_id: 6, trash_id: 9 }],
+        failed: failures,
+      });
+    // The detail refetch after a partial apply returns the injected error, if any.
+    if (detailError && /\/api\/groups\/\d+/.test(path)) return detailError;
+    // Sequential list responses; the last repeats so recovery retries see a stable answer.
+    const next = responses.length > 1 ? responses.shift()! : responses[0]!;
+    return Response.json(next);
+  });
+  vi.stubGlobal('fetch', fetch);
+  cache.setQueryData(groupsKey('exact', cursor), {
+    items: groups(1, 2, 3),
+    next_cursor: 'old-next',
+  });
+  try {
+    renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: cache },
+        createElement(
+          MemoryRouter,
+          { initialEntries: [`/groups/3${search}`] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: '/groups/:id', element: createElement(Groups) })
+          )
+        )
+      )
+    );
+    if (!applied) throw new Error('Group detail did not receive its apply handler');
+    await applied({ moved: [{ file_id: 6, trash_id: 9 }], failed: failures });
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalled());
+    return {
+      target: navigate.mock.calls[0]?.[0],
+      requests: fetch.mock.calls.map(([url]) => url),
+    };
+  } finally {
+    cache.clear();
+  }
+}
+
+describe('apply-and-advance', () => {
+  it('recovers past failed items: dissolved groups advance and stale generations restart', () => {
+    const missing = new GroupMissingError();
+    const stale = new ResultsChangedError();
+    const failures = 1;
+    expect(applyRecovery(missing, { isPending: false, failedCount: failures })).toBe('advance');
+    expect(applyRecovery(stale, { isPending: false, failedCount: failures })).toBe('stale');
+    // Failed items alone never suppress recovery ordering: pending wins only while in flight.
+    expect(applyRecovery(undefined, { isPending: true, failedCount: 0 })).toBe('none');
+    expect(applyRecovery(undefined, { isPending: false, failedCount: failures })).toBe('none');
+  });
+  it('preserves pre-apply order and skips unactionable members without wrapping', () => {
+    expect(nextGroup(groups(3, 1, 2), 1, groups(1, 2, 3), false)?.id).toBe(2);
+    expect(nextGroup(groups(1, 2, 4), 3, groups(1, 2, 3), false)).toBeUndefined();
+    expect(
+      nextGroup([{ ...groups(2)[0]!, member_count: 1 }, ...groups(3)], 1, groups(1, 2, 3), false)
+        ?.id
+    ).toBe(3);
+  });
+  it('fetches the next page before wrapping at the old page boundary, despite a newly appended group', async () => {
+    const result = await applyAtBoundary(
+      { items: groups(1, 2, 4), next_cursor: 'later' },
+      { items: [{ ...groups(5)[0]!, member_count: 1 }, ...groups(6, 7)], next_cursor: null }
+    );
+    expect(result).toEqual({
+      target: '/groups/6?kind=exact&cursor=later',
+      requests: ['/api/groups?kind=exact', '/api/groups?kind=exact&cursor=later'],
+    });
+  });
+  it('wraps on the refreshed page when there is no next cursor', async () => {
+    expect(await applyAtBoundary({ items: groups(1, 2, 4), next_cursor: null })).toEqual({
+      target: '/groups/1?kind=exact',
+      requests: ['/api/groups?kind=exact'],
+    });
+  });
+  it('tries only one additional page before wrapping with the original page cursor', async () => {
+    expect(
+      await applyAtBoundary(
+        { items: groups(1, 2, 4), next_cursor: 'later' },
+        { items: [], next_cursor: 'beyond-bound' },
+        'current'
+      )
+    ).toEqual({
+      target: '/groups/1?kind=exact&cursor=current',
+      requests: ['/api/groups?kind=exact&cursor=current', '/api/groups?kind=exact&cursor=later'],
+    });
+  });
+  it.each([null, 'later'])(
+    'returns to the group list when exhausted (next cursor: %s)',
+    async (next_cursor) => {
+      const result = await applyAtBoundary(
+        { items: [], next_cursor },
+        { items: groups(3), next_cursor: null }
+      );
+      expect(result.target).toBe('/groups?kind=exact');
+      expect(result.requests).toHaveLength(next_cursor ? 2 : 1);
+    }
+  );
+});
 
 it('recognizes every scanner video extension without confusing image filenames or directories', () => {
   for (const extension of [
