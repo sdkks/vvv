@@ -90,6 +90,8 @@ async function request(path: string, init?: RequestInit) {
       filesystem_boundary: 'This directory is across a filesystem boundary.',
       inside_trash: 'Trash contents are excluded from previews.',
       invalid_preview_path: 'The preview path must stay inside the registered directory.',
+      invalid_browse_path: 'Enter an absolute container directory path, such as /media.',
+      invalid_browse_cursor: 'This folder page is no longer valid. Go to the path again.',
       invalid_cursor: 'This preview page is no longer valid. Restart the preview.',
     };
     throw new Error(

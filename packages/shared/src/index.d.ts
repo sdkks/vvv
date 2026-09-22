@@ -67,6 +67,9 @@ export interface DirectoryEntries extends Page<DirectoryEntry> {
   path: string;
   has_more: boolean;
 }
+export interface BrowseResponse extends Page<{ name: string; path: string }> {
+  path: string;
+}
 export type EntryFilter = 'media' | 'all';
 export type CreateScanDirResponse = ScanDir;
 export type UpdateScanDirResponse = ScanDir;

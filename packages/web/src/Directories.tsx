@@ -1,9 +1,11 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addScanDir, getScanDirs, removeScanDir, updateScanDir } from './api';
 import { PageHeading } from './PageHeading';
 import { DirectoryPreview } from './DirectoryPreview';
+import { DirectoryPicker } from './DirectoryPicker';
+import { finishPicking, pickerStartPath } from './directory-picker';
 
 const options = [
   ['follow_symlinks', 'Follow symbolic links'],
@@ -12,6 +14,8 @@ const options = [
 export function Directories() {
   const cache = useQueryClient();
   const pathInput = useRef<HTMLInputElement>(null);
+  const browseButton = useRef<HTMLButtonElement>(null);
+  const [picker, setPicker] = useState<{ path?: string } | null>(null);
   const query = useQuery({
     queryKey: ['scan-dirs'],
     queryFn: ({ signal }) => getScanDirs(signal),
@@ -46,13 +50,26 @@ export function Directories() {
         aria-busy={action.isPending}
       >
         <label htmlFor="directory-path">Directory path</label>
-        <input
-          ref={pathInput}
-          id="directory-path"
-          name="path"
-          required
-          aria-describedby="directory-hint"
-        />
+        <div className="directory-path-row">
+          <input
+            ref={pathInput}
+            id="directory-path"
+            name="path"
+            required
+            aria-describedby="directory-hint"
+          />
+          <button
+            ref={browseButton}
+            type="button"
+            aria-expanded={picker !== null}
+            aria-controls="directory-picker"
+            onClick={() =>
+              setPicker(picker ? null : { path: pickerStartPath(pathInput.current?.value ?? '') })
+            }
+          >
+            Browse…
+          </button>
+        </div>
         {options.map(([key, label]) => (
           <label className="scan-option" key={key}>
             <input type="checkbox" name={key} disabled={action.isPending} />
@@ -61,6 +78,14 @@ export function Directories() {
         ))}
         <button disabled={action.isPending}>Add directory</button>
       </form>
+      {picker && (
+        <DirectoryPicker
+          initialPath={picker.path}
+          close={(path) =>
+            finishPicking(() => setPicker(null), pathInput.current, browseButton.current, path)
+          }
+        />
+      )}
       {action.isError && <p role="alert">{action.error.message}</p>}
       {action.isSuccess && <p role="status">Directory settings saved.</p>}
       {query.isPending && <p role="status">Loading directories…</p>}

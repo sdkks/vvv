@@ -19,6 +19,7 @@ import { Quarantine } from './quarantine.js';
 import { reconcile } from './reconcile.js';
 import { trashRoutes } from './routes/trash.js';
 import { settingsRoutes } from './routes/settings.js';
+import { browseRoutes } from './routes/browse.js';
 
 export async function createServer(config: Config, logger = true, webDist?: string) {
   const app = Fastify({
@@ -58,6 +59,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   await app.register(auth, { config });
   scanRoutes(app, db, scanner, progress);
   scanDirRoutes(app, db);
+  browseRoutes(app, db);
   groupRoutes(app, db, matcher);
   exportRoutes(app, openReadOnly);
   thumbnailRoutes(app, db, config.dataDir, media);
