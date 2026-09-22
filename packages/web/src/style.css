@@ -184,10 +184,48 @@ a {
   min-width: 0;
 }
 .directory-picker {
+  width: min(42rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
   border: 1px solid #c5ced9;
   border-radius: 0.35rem;
+}
+.directory-picker::backdrop {
+  background: rgb(24 34 48 / 0.55);
+}
+body:has(.directory-picker[open]) {
+  overflow: hidden;
+}
+.directory-picker-surface {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
   padding: 1rem;
-  margin-block: 1rem;
+}
+.directory-picker-content {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.4rem;
+  min-height: 0;
+}
+.directory-picker h2 {
+  margin-top: 0;
+}
+.directory-picker-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid #c5ced9;
+}
+.directory-picker-footer .toolbar {
+  margin: 0;
 }
 .folder-list {
   list-style: none;
@@ -277,6 +315,10 @@ summary {
   background: #f3f5f7;
 }
 @media (max-width: 600px) {
+  .directory-picker {
+    width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
   .matching-method {
     grid-template-columns: 1fr;
     gap: 0.5rem;

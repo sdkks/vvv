@@ -61,11 +61,10 @@ export function Directories() {
           <button
             ref={browseButton}
             type="button"
+            aria-haspopup="dialog"
             aria-expanded={picker !== null}
             aria-controls="directory-picker"
-            onClick={() =>
-              setPicker(picker ? null : { path: pickerStartPath(pathInput.current?.value ?? '') })
-            }
+            onClick={() => setPicker({ path: pickerStartPath(pathInput.current?.value ?? '') })}
           >
             Browse…
           </button>
