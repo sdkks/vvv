@@ -7,7 +7,15 @@ import { expect, it } from 'vitest';
 import { GroupDetail } from './GroupDetail';
 import { PageHeading } from './PageHeading';
 
-function renderMembers(similarities: (number | null)[]) {
+function renderMembers(
+  similarities: (number | null)[],
+  attrs: {
+    size?: number;
+    width?: number | null;
+    height?: number | null;
+    duration_ms?: number | null;
+  }[] = []
+) {
   const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
   const group: GroupResponse = {
     id: 1,
@@ -25,6 +33,7 @@ function renderMembers(similarities: (number | null)[]) {
         duration_ms: null,
         quarantined: false,
         similarity,
+        ...attrs[index],
       })),
       next_cursor: null,
     },
@@ -70,4 +79,37 @@ it('renders a semantic page heading that is programmatically focusable, not a ta
     createElement(MemoryRouter, null, createElement(PageHeading, null, 'Page title'))
   );
   expect(html).toBe('<h1 tabindex="-1">Page title</h1>');
+});
+it('renders a closed auto-mark menu, disabling criteria the whole group lacks', () => {
+  const html = renderMembers([null, null]);
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('aria-controls="auto-mark-menu"');
+  expect(html).toContain('aria-label="Auto-mark criteria"');
+  expect(html).toContain('hidden=""');
+  for (const label of [
+    'Keep largest size',
+    'Keep smallest size',
+    'Keep highest resolution',
+    'Keep lowest resolution',
+  ]) {
+    expect(html).toContain(`>${label}</button>`);
+    expect(html).not.toContain(`<button disabled="">${label}</button>`);
+  }
+  // Image members carry no duration, so both duration criteria are disabled.
+  for (const label of ['Keep longest duration', 'Keep shortest duration']) {
+    expect(html).toContain(`<button disabled="">${label}</button>`);
+  }
+});
+it('enables duration criteria and disables resolution criteria when only durations exist', () => {
+  const html = renderMembers(
+    [null, null],
+    [
+      { width: null, height: null, duration_ms: 5000 },
+      { width: null, height: null, duration_ms: 3000 },
+    ]
+  );
+  expect(html).toContain('>Keep longest duration</button>');
+  expect(html).not.toContain('<button disabled="">Keep longest duration</button>');
+  expect(html).toContain('<button disabled="">Keep highest resolution</button>');
+  expect(html).toContain('<button disabled="">Keep lowest resolution</button>');
 });

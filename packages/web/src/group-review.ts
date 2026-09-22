@@ -1,4 +1,4 @@
-import type { DuplicateGroup } from '@vvv/shared';
+import type { DuplicateGroup, GroupMember } from '@vvv/shared';
 import type { QueryClient } from '@tanstack/react-query';
 import { getGroups, GroupMissingError, ResultsChangedError, type KindFilter } from './api';
 
@@ -34,6 +34,82 @@ export function toggleMarked(marked: Set<number>, id: number) {
   if (next.has(id)) next.delete(id);
   else next.add(id);
   return next;
+}
+
+export type AutoMarkCriterion =
+  | 'largest_size'
+  | 'smallest_size'
+  | 'highest_resolution'
+  | 'lowest_resolution'
+  | 'longest_duration'
+  | 'shortest_duration';
+type AutoMarkMember = Pick<GroupMember, 'file_id' | 'size' | 'width' | 'height' | 'duration_ms'>;
+export const autoMarkCriteria: readonly { criterion: AutoMarkCriterion; label: string }[] = [
+  { criterion: 'largest_size', label: 'Keep largest size' },
+  { criterion: 'smallest_size', label: 'Keep smallest size' },
+  { criterion: 'highest_resolution', label: 'Keep highest resolution' },
+  { criterion: 'lowest_resolution', label: 'Keep lowest resolution' },
+  { criterion: 'longest_duration', label: 'Keep longest duration' },
+  { criterion: 'shortest_duration', label: 'Keep shortest duration' },
+];
+function criterionValue(member: AutoMarkMember, criterion: AutoMarkCriterion) {
+  switch (criterion) {
+    case 'largest_size':
+    case 'smallest_size':
+      return member.size;
+    case 'highest_resolution':
+    case 'lowest_resolution':
+      return member.width === null || member.height === null ? null : member.width * member.height;
+    case 'longest_duration':
+    case 'shortest_duration':
+      return member.duration_ms;
+  }
+}
+const keepSmallest = (criterion: AutoMarkCriterion) =>
+  criterion === 'smallest_size' ||
+  criterion === 'lowest_resolution' ||
+  criterion === 'shortest_duration';
+/** Auto-marking replaces existing markings for the group's members: the best
+ * member by the chosen attribute keeps the unmarked slot (lowest file_id wins
+ * ties) and every other member is marked for discard — the user still reviews
+ * and confirms the quarantine. The reference member has no special role; the
+ * attribute alone decides. Members missing the attribute (images have no
+ * duration, videos may lack dimensions) can never win but are still marked when
+ * another member wins. When no member carries the attribute the criterion is
+ * unavailable and prior markings are returned unchanged. Clear markings remains
+ * the reset. Marked ids outside the member list, which the review screen never
+ * produces, are preserved. */
+export function autoMark(
+  members: AutoMarkMember[],
+  criterion: AutoMarkCriterion,
+  marked: Set<number>
+) {
+  let best: AutoMarkMember | undefined;
+  let bestValue = 0;
+  for (const member of members) {
+    const value = criterionValue(member, criterion);
+    if (value === null) continue;
+    if (
+      !best ||
+      (keepSmallest(criterion) ? value < bestValue : value > bestValue) ||
+      (value === bestValue && member.file_id < best.file_id)
+    ) {
+      best = member;
+      bestValue = value;
+    }
+  }
+  if (!best) return new Set(marked);
+  const next = new Set(
+    [...marked].filter((id) => !members.some((member) => member.file_id === id))
+  );
+  for (const member of members) if (member.file_id !== best.file_id) next.add(member.file_id);
+  return next;
+}
+/** A criterion is available — and its menu item enabled — when at least one
+ * member carries the attribute it compares; with the attribute missing across
+ * the whole group there is nothing to keep by it. */
+export function autoMarkAvailable(members: AutoMarkMember[], criterion: AutoMarkCriterion) {
+  return members.some((member) => criterionValue(member, criterion) !== null);
 }
 
 export type ApplyRecovery = 'advance' | 'stale' | 'none';

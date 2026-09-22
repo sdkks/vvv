@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import type { GroupMember, QuarantineResponse } from '@vvv/shared';
@@ -12,11 +12,15 @@ import {
 import { fileFailure } from './trash-state';
 import {
   applyRecovery,
+  autoMark,
+  autoMarkAvailable,
+  autoMarkCriteria,
   formatBytes,
   formatDuration,
   nextMember,
   reviewShortcut,
   toggleMarked,
+  type AutoMarkCriterion,
 } from './group-review';
 
 function Thumbnail({ member }: { member: GroupMember }) {
@@ -91,6 +95,9 @@ export function GroupDetail({
   const paging = useRef(false);
   const pendingFocus = useRef<number | null>(null);
   const [memberNotice, setMemberNotice] = useState('');
+  const [autoMarkOpen, setAutoMarkOpen] = useState(false);
+  const autoMarkTrigger = useRef<HTMLButtonElement>(null);
+  const autoMarkMenu = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const group = query.data?.pages[0];
   const members = (query.data?.pages.flatMap((page) => page.members.items) ?? []).filter(
@@ -115,6 +122,10 @@ export function GroupDetail({
   useEffect(() => {
     if (loaded) (list.current?.children[0] as HTMLElement | undefined)?.focus();
   }, [loaded]);
+  useEffect(() => {
+    if (autoMarkOpen)
+      autoMarkMenu.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+  }, [autoMarkOpen]);
   useEffect(() => {
     if (query.isFetching || pendingFocus.current === null) return;
     const index = pendingFocus.current;
@@ -160,6 +171,32 @@ export function GroupDetail({
     if (window.confirm(`Move ${marked.size} marked files to Trash? They remain restorable there.`))
       apply.mutate();
     else trigger.focus();
+  }
+  function applyAutoMark(criterion: AutoMarkCriterion) {
+    const next = autoMark(members, criterion, marked);
+    setMarked(next);
+    setAutoMarkOpen(false);
+    const count = members.filter((member) => next.has(member.file_id)).length;
+    setMemberNotice(`Marked ${count} of ${members.length} members — review and apply`);
+    autoMarkTrigger.current?.focus();
+  }
+  function autoMarkKeys(event: ReactKeyboardEvent) {
+    if (!autoMarkOpen || event.key === 'Tab') return;
+    // While the menu is open it owns the keyboard: the section-level shortcuts
+    // (member movement, Escape-to-back) must not fire from inside it.
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+      setAutoMarkOpen(false);
+      autoMarkTrigger.current?.focus();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const items = Array.from(
+        autoMarkMenu.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []
+      );
+      const index = items.indexOf(event.target as HTMLElement);
+      const step = event.key === 'ArrowDown' ? 1 : items.length - 1;
+      items[(index + step) % items.length]?.focus();
+    }
   }
   return (
     <section
@@ -270,6 +307,35 @@ export function GroupDetail({
         <button onClick={() => setMarked(new Set())} disabled={!marked.size || apply.isPending}>
           Clear markings
         </button>
+        <div className="auto-mark" onKeyDown={autoMarkKeys}>
+          <button
+            ref={autoMarkTrigger}
+            aria-expanded={autoMarkOpen}
+            aria-controls="auto-mark-menu"
+            disabled={apply.isPending || !members.length}
+            onClick={() => setAutoMarkOpen((open) => !open)}
+          >
+            Auto-mark
+          </button>
+          <div
+            id="auto-mark-menu"
+            className="auto-mark-menu"
+            role="group"
+            aria-label="Auto-mark criteria"
+            hidden={!autoMarkOpen}
+            ref={autoMarkMenu}
+          >
+            {autoMarkCriteria.map(({ criterion, label }) => (
+              <button
+                key={criterion}
+                disabled={apply.isPending || !autoMarkAvailable(members, criterion)}
+                onClick={() => applyAutoMark(criterion)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <small>Quarantined files can be restored from Trash until permanently purged.</small>
         {apply.isError && <p role="alert">{apply.error.message}</p>}
       </div>

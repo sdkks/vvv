@@ -14,6 +14,9 @@ import {
 } from './api';
 import {
   applyRecovery,
+  autoMark,
+  autoMarkAvailable,
+  autoMarkCriteria,
   groupsKey,
   isVideo,
   nextGroup,
@@ -263,6 +266,91 @@ it('toggles one marking while preserving the other markings and the original set
   expect(marked).toEqual(new Set([1, 2]));
   expect(toggleMarked(marked, 2)).toEqual(initial);
   expect(marked).toEqual(new Set([1, 2]));
+});
+
+describe('auto-mark', () => {
+  const members = (
+    ...specs: {
+      file_id?: number;
+      size?: number;
+      width?: number | null;
+      height?: number | null;
+      duration_ms?: number | null;
+    }[]
+  ) =>
+    specs.map((spec, index) => ({
+      file_id: spec.file_id ?? index + 1,
+      size: spec.size ?? 100,
+      width: spec.width === undefined ? 100 : spec.width,
+      height: spec.height === undefined ? 100 : spec.height,
+      duration_ms: spec.duration_ms === undefined ? 1000 : spec.duration_ms,
+    }));
+  const sorted = (marked: Set<number>) => [...marked].sort((a, b) => a - b);
+  const varied = members(
+    { size: 300, width: 100, height: 100, duration_ms: 1000 },
+    { size: 100, width: 400, height: 200, duration_ms: 5000 },
+    { size: 200, width: 200, height: 150, duration_ms: 3000 }
+  );
+  it.each([
+    ['largest_size', 1],
+    ['smallest_size', 2],
+    ['highest_resolution', 2],
+    ['lowest_resolution', 1],
+    ['longest_duration', 2],
+    ['shortest_duration', 1],
+  ] as const)('keeps the best member by %s and marks the rest for discard', (criterion, keep) => {
+    const marked = autoMark(varied, criterion, new Set());
+    expect(marked.has(keep)).toBe(false);
+    expect(sorted(marked)).toEqual([1, 2, 3].filter((id) => id !== keep));
+  });
+  it('offers the six criteria with human labels', () => {
+    expect(autoMarkCriteria.map(({ criterion }) => criterion)).toEqual([
+      'largest_size',
+      'smallest_size',
+      'highest_resolution',
+      'lowest_resolution',
+      'longest_duration',
+      'shortest_duration',
+    ]);
+    expect(autoMarkCriteria.map(({ label }) => label)).toEqual([
+      'Keep largest size',
+      'Keep smallest size',
+      'Keep highest resolution',
+      'Keep lowest resolution',
+      'Keep longest duration',
+      'Keep shortest duration',
+    ]);
+  });
+  it('breaks ties by lowest file_id regardless of member order', () => {
+    const tied = members({ file_id: 5, size: 100 }, { file_id: 2, size: 100 });
+    expect(sorted(autoMark(tied, 'largest_size', new Set()))).toEqual([5]);
+    expect(sorted(autoMark(tied, 'smallest_size', new Set()))).toEqual([5]);
+  });
+  it('never keeps a member missing the attribute but still marks it when another member wins', () => {
+    const images = members({ duration_ms: null }, { duration_ms: 2000 });
+    expect(sorted(autoMark(images, 'longest_duration', new Set()))).toEqual([1]);
+    const dimensionless = members({ width: null, height: null }, { width: 10, height: 10 });
+    expect(sorted(autoMark(dimensionless, 'highest_resolution', new Set()))).toEqual([1]);
+  });
+  it('returns prior markings unchanged and reports unavailable when every member lacks the attribute', () => {
+    const images = members({ duration_ms: null }, { duration_ms: null });
+    const prior = new Set([1]);
+    expect(autoMark(images, 'longest_duration', prior)).toEqual(prior);
+    expect(autoMarkAvailable(images, 'longest_duration')).toBe(false);
+    expect(autoMarkAvailable(images, 'largest_size')).toBe(true);
+    expect(autoMarkAvailable(varied, 'longest_duration')).toBe(true);
+  });
+  it('replaces prior markings, unmarking a previously marked winner', () => {
+    expect(sorted(autoMark(varied, 'largest_size', new Set([1, 3])))).toEqual([2, 3]);
+  });
+  it('preserves marked ids outside the member list', () => {
+    expect(
+      sorted(autoMark(members({ file_id: 7 }, { file_id: 8 }), 'largest_size', new Set([99])))
+    ).toEqual([8, 99]);
+  });
+  it('marks nothing in a single-member group', () => {
+    expect(autoMark(members({ file_id: 4 }), 'largest_size', new Set()).size).toBe(0);
+  });
 });
 
 describe('stale recovery', () => {
