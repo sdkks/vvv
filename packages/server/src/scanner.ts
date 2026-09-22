@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
-import type { FileHashAlgorithm, FileSizePolicy, ScanProgress } from '@vvv/shared';
+import type { FileHashAlgorithm, FileSizePolicy, ScanLogLevel, ScanLogStep, ScanProgress } from '@vvv/shared';
 import { imageHash, imageMetadata, processFile, storeHashes } from './hashing.js';
 import { MediaWork, videoHash, videoMetadata } from './video.js';
+import type { ScanLog } from './scan-log.js';
 import {
   fileHashAlgorithm,
   fileSizeSettings,
@@ -41,6 +42,7 @@ export class Scanner {
   private abort = new AbortController();
   private task?: Promise<void>;
   private currentFile?: string;
+  private scanId = 0;
   private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
   private perceptual = { image: true, video: true };
   private algorithm: FileHashAlgorithm = 'sha256';
@@ -48,8 +50,9 @@ export class Scanner {
     private db: Database.Database,
     private log: FastifyBaseLogger,
     private onProgress?: (snapshot: ScanProgress) => void,
-    private onDone?: () => void,
-    private media = new MediaWork()
+    private onDone?: (scanId: number) => void,
+    private media = new MediaWork(),
+    private logs?: ScanLog
   ) {
     db.transaction(() => {
       db.exec(
@@ -69,6 +72,16 @@ export class Scanner {
     if (!this.onProgress) return;
     const snapshot = this.current();
     if (snapshot) this.onProgress(snapshot);
+  }
+  /** Mirror a scan lifecycle event to the bounded log ring and structured logs. */
+  private logStep(level: ScanLogLevel, step: ScanLogStep, detail: string, durationMs?: number) {
+    this.logs?.add(this.scanId, level, step, detail, durationMs);
+    this.log[level](
+      durationMs === undefined
+        ? { scan_id: this.scanId, step }
+        : { scan_id: this.scanId, step, duration_ms: Math.max(0, Math.round(durationMs)) },
+      detail
+    );
   }
   start(): number | null {
     if (this.task) return null;
@@ -179,6 +192,7 @@ export class Scanner {
         // Processed includes traversal exclusions; they never increment the error count.
         .run(Number(completed || !!error || !!exclusion), Number(!!error), scan);
     })();
+    if (error) this.logs?.add(scan, 'error', 'error', `${join(dir.path, path)}: ${error}`);
     this.publish();
   }
   private async walk(
@@ -244,9 +258,26 @@ export class Scanner {
   }
   private async run(id: number) {
     await yieldLoop();
-    this.log.info({ scan_id: id }, 'Scan started');
+    this.scanId = id;
+    const started = Date.now();
+    const dirs = (
+      this.db.prepare('SELECT count(*) AS count FROM scan_dirs').get() as { count: number }
+    ).count;
+    this.logStep(
+      'info',
+      'scan',
+      `Scan started — ${dirs} registered ${dirs === 1 ? 'directory' : 'directories'}`
+    );
     let status = 'done';
+    let failure = '';
+    // Per-kind wall-clock span (first file start to last file end) and count of hashed files.
+    const hashed: Record<'image' | 'video', { count: number; first: number; last: number }> = {
+      image: { count: 0, first: 0, last: 0 },
+      video: { count: 0, first: 0, last: 0 },
+    };
     try {
+      const traversalStart = Date.now();
+      this.logStep('info', 'traversal', 'Traversal started');
       let after = 0;
       while (!this.cancelled) {
         const dir = this.db
@@ -275,6 +306,17 @@ export class Scanner {
         }
         await yieldLoop();
       }
+      const discovered = (
+        this.db.prepare('SELECT discovered FROM scans WHERE id=?').get(id) as {
+          discovered: number;
+        }
+      ).discovered;
+      this.logStep(
+        'info',
+        'traversal',
+        `Traversal finished — ${discovered} ${discovered === 1 ? 'file' : 'files'} discovered`,
+        Date.now() - traversalStart
+      );
       while (!this.cancelled) {
         const batch = this.db
           .prepare(
@@ -301,13 +343,18 @@ export class Scanner {
                 const path = join(file.path, file.rel_path);
                 this.currentFile = path;
                 this.publish();
+                const fileStart = Date.now();
+                let hashMs = 0;
+                let sampleMs = 0;
                 let error: string | null = null;
                 let result:
                   | { hashes: Buffer[]; width?: number; height?: number; duration_ms?: number }
                   | undefined;
                 try {
                   if (file.status === 'pending' || file.sha256 === null) {
+                    const hashStart = Date.now();
                     const sha = file.sha256 ?? (await processFile(path, this.algorithm));
+                    hashMs = Date.now() - hashStart;
                     this.db
                       .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
                       .run(sha, file.id);
@@ -315,11 +362,14 @@ export class Scanner {
                   // Only reuse a hash-only/resumable checkpoint; traversal already removed
                   // stale phashes on size/mtime changes. Backfill still runs when absent.
                   if (!file.reuse_phashes && file.kind === 'image') {
+                    const sampleStart = Date.now();
                     if (this.perceptual.image) {
                       const image = await imageHash(path);
                       result = { ...image, hashes: [image.hash] };
                     } else result = { ...(await imageMetadata(path)), hashes: [] };
+                    sampleMs = Date.now() - sampleStart;
                   } else if (!file.reuse_phashes) {
+                    const sampleStart = Date.now();
                     const options = {
                       timeout: matchingSetting(this.db, 'video_timeout_ms'),
                       signal: this.abort.signal,
@@ -331,6 +381,7 @@ export class Scanner {
                           options
                         )
                       : { ...(await videoMetadata(path, options)), hashes: [] };
+                    sampleMs = Date.now() - sampleStart;
                   }
                 } catch (cause) {
                   if (this.abort.signal.aborted) return;
@@ -353,8 +404,29 @@ export class Scanner {
                     .run(Number(!!error), id);
                 })();
                 this.publish();
+                const stat = file.kind === 'image' || file.kind === 'video' ? hashed[file.kind] : undefined;
+                if (stat) {
+                  stat.count++;
+                  if (!stat.first) stat.first = fileStart;
+                  stat.last = Date.now();
+                }
+                const elapsed = Date.now() - fileStart;
+                const slow = [
+                  hashMs > 10_000 ? `hashing ${Math.round(hashMs / 100) / 10}s` : '',
+                  sampleMs > 10_000 ? `sampling ${Math.round(sampleMs / 100) / 10}s` : '',
+                ]
+                  .filter(Boolean)
+                  .join(', ');
+                if (slow)
+                  this.logStep(
+                    'warn',
+                    sampleMs > 10_000 ? 'sample' : 'hash',
+                    `Slow file: ${path} — ${slow}`,
+                    elapsed
+                  );
                 if (error) {
                   this.log.warn({ scan_id: id, file_id: file.id, error }, 'File processing failed');
+                  this.logs?.add(id, 'error', 'error', `${path}: ${error}`);
                 }
               }, this.abort.signal)
               .catch((error: unknown) => {
@@ -364,17 +436,41 @@ export class Scanner {
         );
         this.currentFile = undefined;
       }
+      for (const kind of ['image', 'video'] as const) {
+        const stat = hashed[kind];
+        if (stat.count)
+          this.logStep(
+            'info',
+            'hash',
+            `Hashed ${stat.count} ${kind} ${stat.count === 1 ? 'file' : 'files'}`,
+            stat.last - stat.first
+          );
+      }
       if (this.cancelled) status = 'cancelled';
     } catch (error) {
       status = 'interrupted';
-      this.log.error({ scan_id: id, error: message(error) }, 'Scan interrupted');
+      failure = message(error);
     }
     this.currentFile = undefined;
     this.db
       .prepare("UPDATE scans SET status=?,finished_at=datetime('now') WHERE id=?")
       .run(status, id);
     this.publish();
-    this.log.info({ scan_id: id, status }, 'Scan finished');
-    if (status === 'done') this.onDone?.();
+    const totals = this.db
+      .prepare('SELECT processed,errors FROM scans WHERE id=?')
+      .get(id) as { processed: number; errors: number };
+    const detail =
+      status === 'done'
+        ? `Scan complete — ${totals.processed} processed, ${totals.errors} errors`
+        : status === 'cancelled'
+          ? `Scan cancelled — ${totals.processed} processed, ${totals.errors} errors`
+          : `Scan interrupted: ${failure} — ${totals.processed} processed, ${totals.errors} errors`;
+    this.logStep(
+      status === 'done' ? 'info' : status === 'cancelled' ? 'warn' : 'error',
+      'complete',
+      detail,
+      Date.now() - started
+    );
+    if (status === 'done') this.onDone?.(id);
   }
 }

@@ -231,8 +231,8 @@ it.each(['pending', 'fs_done'])(
 it('coalesces scan completion during a match into one subsequent run', async () => {
   const started = vi.spyOn(log, 'info');
   matcher.start();
-  matcher.afterScan();
-  matcher.afterScan();
+  matcher.afterScan(1);
+  matcher.afterScan(2);
   await vi.waitFor(() =>
     expect(started.mock.calls.filter((call) => call[1] === 'Matching activated')).toHaveLength(2)
   );

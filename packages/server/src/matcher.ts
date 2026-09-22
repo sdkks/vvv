@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
+import type { ScanLog } from './scan-log.js';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { hamming } from './hashing.js';
 import { matchPerceptual } from './perceptual-matcher.js';
@@ -84,19 +85,28 @@ export function activeMatchRun(db: Database.Database): number | null {
     { value: string } | undefined;
   return row ? Number(row.value) : null;
 }
+/** Most recent scan id, or 0 before the first scan; manual match runs log under it. */
+export function latestScan(db: Database.Database): number {
+  const row = db.prepare('SELECT max(id) AS id FROM scans').get() as { id: number | null };
+  return row.id ?? 0;
+}
 export class Matcher {
   private task?: Promise<void>;
   private queued = false;
+  private logScanId?: number;
   constructor(
     private db: Database.Database,
-    private log: FastifyBaseLogger
+    private log: FastifyBaseLogger,
+    private logs?: ScanLog
   ) {
     db.function('phash_distance', { deterministic: true }, (a, b) =>
       a instanceof Uint8Array && b instanceof Uint8Array ? hamming(a, b) : null
     );
     db.exec("UPDATE match_runs SET status='superseded' WHERE status='building'");
   }
-  afterScan() {
+  /** Called when a scan completes; the triggered match run logs under that scan. */
+  afterScan(scanId: number) {
+    this.logScanId = scanId;
     if (this.task) this.queued = true;
     else this.start();
   }
@@ -111,6 +121,12 @@ export class Matcher {
           .prepare("UPDATE match_runs SET status='superseded' WHERE id=? AND status='building'")
           .run(id);
         this.log.error({ match_run: id, err: error }, 'Matching failed');
+        this.logs?.add(
+          this.logScanId ?? latestScan(this.db),
+          'error',
+          'complete',
+          `Matching failed — run ${id}`
+        );
       })
       .finally(() => {
         this.task = undefined;
@@ -128,7 +144,12 @@ export class Matcher {
   private async run(id: number) {
     await yieldLoop();
     const db = this.db;
+    // Match timing lands in the triggering scan's ring; manual runs use the latest scan.
+    const scanId = this.logScanId ?? latestScan(db);
+    this.logScanId = undefined;
+    const startedAt = Date.now();
     this.log.info({ match_run: id }, 'Matching started');
+    this.logs?.add(scanId, 'info', 'match', `Matching started — run ${id}`);
     const candidates = db.prepare(`SELECT size,sha256 FROM files INDEXED BY idx_files_exact
       WHERE status='done' AND sha256 IS NOT NULL AND (size,sha256)>(?,?)
       GROUP BY size,sha256 HAVING count(*)>1 ORDER BY size,sha256 LIMIT 1000`);
@@ -174,9 +195,18 @@ export class Matcher {
     }
     const stats = [];
     for (const kind of ['image', 'video'] as const) {
+      const kindStart = Date.now();
       const result = await matchPerceptual(db, id, (groupId) => refreshGroup(db, groupId), kind);
       stats.push(result);
+      const kindMs = Date.now() - kindStart;
       this.log.info({ match_run: id, kind, ...result }, 'Perceptual matching finished');
+      this.logs?.add(
+        scanId,
+        'info',
+        'match',
+        `${kind} perceptual matching: ${result.candidate_pairs} candidates — run ${id}`,
+        kindMs
+      );
     }
     db.prepare('UPDATE match_runs SET candidate_pairs=?,skipped_buckets=? WHERE id=?').run(
       stats.reduce((sum, result) => sum + result.candidate_pairs, 0),
@@ -202,6 +232,13 @@ export class Matcher {
       ).run(id);
     })();
     this.log.info({ match_run: id }, 'Matching activated');
+    this.logs?.add(
+      scanId,
+      'info',
+      'complete',
+      `Matching complete — run ${id}`,
+      Date.now() - startedAt
+    );
     for (;;) {
       const removed = db.transaction(
         () =>

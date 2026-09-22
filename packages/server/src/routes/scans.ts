@@ -5,11 +5,14 @@ import type {
   CurrentScanResponse,
   ScanError,
   ScanErrorsResponse,
+  ScanLogLevel,
+  ScanLogsResponse,
   ScanProgress,
   StartScanResponse,
 } from '@vvv/shared';
 import type { Scanner } from '../scanner.js';
 import type { Progress } from '../progress.js';
+import type { ScanLog } from '../scan-log.js';
 
 export const idParams = {
   type: 'object',
@@ -22,7 +25,8 @@ export function scanRoutes(
   app: FastifyInstance,
   db: Database.Database,
   scanner: Scanner,
-  progress: Progress
+  progress: Progress,
+  logs: ScanLog
 ) {
   app.post('/api/scans', async (_request, reply) => {
     const id = scanner.start();
@@ -79,6 +83,50 @@ export function scanRoutes(
         items,
         next_cursor: rows.length > limit ? String(items.at(-1)?.file_id) : null,
       } satisfies ScanErrorsResponse;
+    }
+  );
+  app.get<{
+    Querystring: { scan_id?: string; level?: ScanLogLevel; cursor?: string; limit?: string };
+  }>(
+    '/api/scans/logs',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            scan_id: { type: 'string', pattern: '^[1-9][0-9]{0,14}$' },
+            level: { type: 'string', enum: ['info', 'warn', 'error'] },
+            cursor: { type: 'string', pattern: '^([1-9][0-9]{0,14})?$' },
+            limit: { type: 'string', pattern: '^[1-9][0-9]{0,2}$' },
+          },
+        },
+      },
+    },
+    async (request): Promise<ScanLogsResponse> => {
+      const limit = Math.min(Number(request.query.limit ?? 50), 500);
+      return logs.history({
+        scanId: request.query.scan_id ? Number(request.query.scan_id) : undefined,
+        level: request.query.level,
+        before: request.query.cursor ? Number(request.query.cursor) : undefined,
+        limit,
+      });
+    }
+  );
+  app.get<{ Params: { id: string } }>(
+    '/api/scans/:id/logs-stream',
+    { schema: { params: idParams } },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      if (!db.prepare('SELECT id FROM scans WHERE id=?').get(id))
+        return reply.code(404).send({ error: 'scan_not_found' });
+      reply.hijack();
+      const lastEventId = Number(request.headers['last-event-id']);
+      logs.connect(
+        reply.raw,
+        id,
+        Number.isSafeInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0
+      );
     }
   );
   app.get<{ Params: { id: string } }>(

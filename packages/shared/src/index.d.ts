@@ -79,6 +79,27 @@ export interface ScanProgressEvent {
   event: 'progress';
   data: ScanProgress;
 }
+export type ScanLogLevel = 'info' | 'warn' | 'error';
+export type ScanLogStep =
+  | 'scan'
+  | 'traversal'
+  | 'hash'
+  | 'sample'
+  | 'match'
+  | 'error'
+  | 'complete';
+export interface ScanLogEntry {
+  /** Monotonically increasing within a server run; doubles as history cursor and SSE event id. */
+  id: number;
+  /** ISO 8601 timestamp with zone. */
+  ts: string;
+  scan_id: number;
+  step: ScanLogStep;
+  detail: string;
+  level: ScanLogLevel;
+  duration_ms?: number;
+}
+export type ScanLogsResponse = Page<ScanLogEntry>;
 export interface ScanError {
   file_id: number;
   path: string;
