@@ -179,7 +179,49 @@ summary {
   cursor: pointer;
   padding-block: 0.75rem;
 }
+.directory-preview h2,
+.directory-preview button {
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.directory-preview table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin-block: 1rem;
+}
+.directory-preview th,
+.directory-preview td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5rem;
+  border-bottom: 1px solid #c5ced9;
+  overflow-wrap: anywhere;
+}
+.directory-preview caption {
+  text-align: left;
+  color: #475569;
+}
 @media (max-width: 600px) {
+  .directory-preview thead {
+    position: absolute;
+    clip-path: inset(50%);
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+  .directory-preview tr,
+  .directory-preview td {
+    display: block;
+  }
+  .directory-preview tr {
+    border: 1px solid #c5ced9;
+    margin-block: 0.75rem;
+  }
+  .directory-preview td::before {
+    content: attr(data-label) ': ';
+    font-weight: 600;
+  }
   main {
     margin: 0;
     padding: 1rem;

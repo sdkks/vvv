@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addScanDir, getScanDirs, removeScanDir, updateScanDir } from './api';
 import { PageHeading } from './PageHeading';
+import { DirectoryPreview } from './DirectoryPreview';
 
 const options = [
   ['follow_symlinks', 'Follow symbolic links'],
@@ -100,7 +101,8 @@ export function Directories() {
                 }}
               >
                 Remove directory
-              </button>
+              </button>{' '}
+              <DirectoryPreview dir={dir} />
             </fieldset>
           </li>
         ))}

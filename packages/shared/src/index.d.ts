@@ -45,6 +45,28 @@ export interface CreateScanDirRequest extends UpdateScanDirRequest {
 export interface ScanDirsResponse {
   items: ScanDir[];
 }
+export type ScanDecision =
+  | 'folder'
+  | 'would_process'
+  | 'unsupported_type'
+  | 'symlink_not_followed'
+  | 'filesystem_boundary'
+  | 'permission_denied'
+  | 'inside_trash'
+  | 'other';
+export interface DirectoryEntry {
+  name: string;
+  type: 'folder' | 'file' | 'symlink';
+  kind: 'folder' | 'image' | 'video' | 'other';
+  size: number | null;
+  decision: ScanDecision;
+  decision_detail?: string;
+}
+export interface DirectoryEntries extends Page<DirectoryEntry> {
+  path: string;
+  has_more: boolean;
+}
+export type EntryFilter = 'media' | 'all';
 export type CreateScanDirResponse = ScanDir;
 export type UpdateScanDirResponse = ScanDir;
 export type DeleteScanDirResponse = void;

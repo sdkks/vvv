@@ -1,11 +1,12 @@
 import { lstat, opendir, realpath, stat } from 'node:fs/promises';
-import { extname, join, sep } from 'node:path';
+import { join } from 'node:path';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
 import { imageHash, processFile, storeHashes } from './hashing.js';
 import { MediaWork, mediaSetting, videoHash } from './video.js';
+import { crossesBoundary, insideTrash, mediaKind, skipsSymlink } from './traversal-policy.js';
 
 type Directory = {
   id: number;
@@ -14,21 +15,6 @@ type Directory = {
   follow_symlinks: number;
   cross_filesystems: number;
 };
-const images = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'tiff', 'avif']);
-const videos = new Set([
-  'mp4',
-  'mkv',
-  'avi',
-  'mov',
-  'webm',
-  'm4v',
-  'mpg',
-  'mpeg',
-  'ts',
-  'm2ts',
-  'wmv',
-  'flv',
-]);
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const isVanishedOrLoop = (error: unknown) =>
   typeof error === 'object' &&
@@ -165,17 +151,16 @@ export class Scanner {
   ): Promise<void> {
     if (this.cancelled) return;
     const absolute = join(dir.path, relative);
-    if (absolute.split(sep).includes('.vvv-trash')) return;
-    const extension = extname(relative).slice(1).toLowerCase();
-    const kind = images.has(extension) ? 'image' : videos.has(extension) ? 'video' : null;
+    if (insideTrash(absolute)) return;
+    const kind = mediaKind(relative);
     let info;
     let linked = false;
     try {
       info = await lstat(absolute, { bigint: true });
       linked = info.isSymbolicLink();
-      if (linked && !dir.follow_symlinks) return;
+      if (skipsSymlink(linked, dir.follow_symlinks)) return;
       if (linked || root === undefined) {
-        if ((await realpath(absolute)).split(sep).includes('.vvv-trash')) return;
+        if (insideTrash(await realpath(absolute))) return;
       }
       if (linked) info = await stat(absolute, { bigint: true });
     } catch (error) {
@@ -185,7 +170,7 @@ export class Scanner {
       return;
     }
     root ??= info.dev;
-    if (!dir.cross_filesystems && root !== info.dev) return;
+    if (crossesBoundary(root, info.dev, dir.cross_filesystems)) return;
     if (info.isFile() && kind) {
       this.record(dir, relative, kind, info.size, info.mtimeNs, scan, null);
     } else if (info.isDirectory()) {

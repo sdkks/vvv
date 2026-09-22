@@ -65,6 +65,14 @@ async function request(path: string, init?: RequestInit) {
       directory_registered: 'This directory is already registered.',
       invalid_directory: 'Directory not found or not accessible on the server.',
       not_a_directory: 'This path is not a directory.',
+      permission_denied: 'Permission denied. Check directory access on the server.',
+      directory_unavailable: 'Directory unavailable. It may have moved or changed.',
+      directory_not_found: 'This directory is no longer registered.',
+      symlink_not_followed: 'This directory is a symlink and following links is disabled.',
+      filesystem_boundary: 'This directory is across a filesystem boundary.',
+      inside_trash: 'Trash contents are excluded from previews.',
+      invalid_preview_path: 'The preview path must stay inside the registered directory.',
+      invalid_cursor: 'This preview page is no longer valid. Restart the preview.',
     };
     throw new Error(
       (typeof code === 'string' && messages[code]) ||

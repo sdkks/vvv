@@ -10,6 +10,7 @@ import type {
 } from '@vvv/shared';
 import { idParams } from './scans.js';
 import { deleteScanDir } from '../matcher.js';
+import { entryRoutes } from './entries.js';
 
 const options = { follow_symlinks: { type: 'boolean' }, cross_filesystems: { type: 'boolean' } };
 type DirectoryRow = Omit<ScanDir, 'follow_symlinks' | 'cross_filesystems'> & {
@@ -23,6 +24,7 @@ const directory = (row: DirectoryRow): ScanDir => ({
 });
 
 export function scanDirRoutes(app: FastifyInstance, db: Database.Database) {
+  entryRoutes(app, db);
   const select = `SELECT id,path,follow_symlinks,cross_filesystems,
     (SELECT count(*) FROM files f WHERE f.scan_dir_id=d.id) AS file_count FROM scan_dirs d`;
   const get = (id: number | string) =>
