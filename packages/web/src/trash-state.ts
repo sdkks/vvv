@@ -1,7 +1,7 @@
-import type { Settings } from '@vvv/shared';
+import type { RetentionSettings } from '@vvv/shared';
 
 export const validRetention = (days: number) => Number.isInteger(days) && days >= 1 && days <= 3650;
-export const policySummary = (policy: Settings) =>
+export const policySummary = (policy: RetentionSettings) =>
   policy.auto_purge_enabled
     ? `Auto-purge is on: files are permanently deleted after ${policy.retention_days} days in Trash (checked hourly).`
     : `Auto-purge is off: files are kept until manually purged. Retention when enabled: ${policy.retention_days} days.`;

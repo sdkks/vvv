@@ -124,11 +124,27 @@ export interface ExportGroup {
 export interface ExportResponse {
   groups: ExportGroup[];
 }
-export interface Settings {
+export type MatchingMethod = {
+  label: string;
+  scope: string;
+  enabled: true;
+} & (
+  | { id: 'exact'; threshold: null }
+  | { id: 'image_dhash' | 'video_dhash'; threshold: number }
+);
+export interface MatchingSettings {
+  methods: MatchingMethod[];
+  video_frame_count: number;
+  video_timeout_ms: number;
+}
+export interface RetentionSettings {
   retention_days: number;
   auto_purge_enabled: boolean;
 }
-export type UpdateSettingsRequest = Partial<Settings>;
+export interface Settings extends RetentionSettings {
+  matching: MatchingSettings;
+}
+export type UpdateSettingsRequest = Partial<RetentionSettings>;
 export interface QuarantineResponse {
   moved: { file_id: number; trash_id: number }[];
   failed: { file_id: number; error: string }[];

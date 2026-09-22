@@ -16,6 +16,34 @@ let root: string;
 let app: Awaited<ReturnType<typeof createServer>>;
 let db: ReturnType<typeof openDatabase>['db'];
 let cookie: string;
+const matching: Settings['matching'] = {
+  methods: [
+    {
+      id: 'exact',
+      label: 'Exact duplicates (SHA-256)',
+      scope: 'all files',
+      enabled: true,
+      threshold: null,
+    },
+    {
+      id: 'image_dhash',
+      label: 'Near-duplicate images (perceptual dHash)',
+      scope: 'image files',
+      enabled: true,
+      threshold: 6,
+    },
+    {
+      id: 'video_dhash',
+      label: 'Near-duplicate videos (frame perceptual dHash)',
+      scope: 'video files',
+      enabled: true,
+      threshold: 10,
+    },
+  ],
+  video_frame_count: 9,
+  video_timeout_ms: 600000,
+};
+const defaults = { retention_days: 30, auto_purge_enabled: false, matching };
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'vvv-settings-'));
   app = await createServer({ ...config, dataDir: root }, false);
@@ -55,7 +83,37 @@ it('requires authentication before validation or mutation', async () => {
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: 'unauthorized' });
   }
-  expect((await get()).json()).toEqual({ retention_days: 30, auto_purge_enabled: false });
+  expect((await get()).json()).toEqual(defaults);
+});
+it('reports effective matching defaults without inserting absent keys', async () => {
+  db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?)').run(
+    'image_phash_threshold',
+    'video_phash_threshold',
+    'video_frame_count',
+    'video_timeout_ms'
+  );
+  const before = db.prepare('SELECT * FROM settings ORDER BY key').all();
+  const response = await get();
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual(defaults);
+  expect(db.prepare('SELECT * FROM settings ORDER BY key').all()).toEqual(before);
+});
+it('reports independently seeded effective values, including a zero threshold', async () => {
+  db.exec(
+    "INSERT OR REPLACE INTO settings VALUES ('image_phash_threshold','0'),('video_phash_threshold','12'),('video_frame_count','3'),('video_timeout_ms','90000')"
+  );
+  const response = await get();
+  expect(response.statusCode).toBe(200);
+  expect(response.json<Settings>().matching).toEqual({
+    methods: matching.methods.map((method) => ({
+      ...method,
+      threshold: method.id === 'exact' ? null : method.id === 'image_dhash' ? 0 : 12,
+    })),
+    video_frame_count: 3,
+    video_timeout_ms: 90000,
+  });
+  db.prepare("DELETE FROM settings WHERE key='image_phash_threshold'").run();
+  expect((await get()).json<Settings>().matching.methods[1]?.threshold).toBe(6);
 });
 it('strictly rejects invalid settings without partial writes', async () => {
   for (const payload of [
@@ -72,10 +130,16 @@ it('strictly rejects invalid settings without partial writes', async () => {
     { auto_purge_enabled: 'true' },
     { auto_purge_enabled: null },
     { active_match_run: '2' },
+    { matching },
+    { retention_days: 2, matching },
+    { image_phash_threshold: 4 },
+    { video_phash_threshold: 8 },
+    { video_frame_count: 3 },
+    { video_timeout_ms: 90000 },
     { retention_days: 2, auto_purge_enabled: true, unknown: false },
   ]) {
     expect((await update(payload)).statusCode, JSON.stringify(payload)).toBe(400);
-    expect((await get()).json()).toEqual({ retention_days: 30, auto_purge_enabled: false });
+    expect((await get()).json()).toEqual(defaults);
   }
   expect((await patch({ retention_days: 2 })).statusCode).toBe(415);
   expect(db.prepare('SELECT * FROM file_operations').all()).toEqual([]);
@@ -95,6 +159,7 @@ it('round-trips partial updates and boundaries through persistent storage after 
   expect((await get()).json<Settings>()).toEqual({
     retention_days: 3650,
     auto_purge_enabled: true,
+    matching,
   });
   expect((await update({ auto_purge_enabled: false })).json<Settings>()).toEqual({
     retention_days: 3650,

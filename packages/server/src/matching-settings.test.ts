@@ -1,0 +1,38 @@
+import Database from 'better-sqlite3';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { matchingSetting, numericSetting } from './matching-settings.js';
+import { mediaSetting } from './video.js';
+
+let db: Database.Database;
+beforeEach(() => {
+  db = new Database(':memory:');
+  db.exec('CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+});
+afterEach(() => db.close());
+
+it.each([
+  ['image_phash_threshold', 6, 0, 64],
+  ['video_phash_threshold', 10, 0, 64],
+  ['video_frame_count', 9, 1, 64],
+  ['video_timeout_ms', 600000, 1, 2147483647],
+] as const)('preserves defaults and validation for %s', (key, fallback, min, max) => {
+  expect(matchingSetting(db, key)).toBe(fallback);
+  const put = db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)');
+  for (const value of [min, max]) {
+    put.run(key, String(value));
+    expect(matchingSetting(db, key)).toBe(value);
+  }
+  for (const value of [min - 1, max + 1, 1.5, 'NaN', 'Infinity', 'invalid']) {
+    put.run(key, String(value));
+    expect(() => matchingSetting(db, key)).toThrow(`Invalid ${key}`);
+  }
+});
+it('preserves the separate thumbnail fallback and nonnegative bucket cap', () => {
+  expect(mediaSetting(db, 'video_timeout_ms', 120000, 2147483647)).toBe(120000);
+  expect(numericSetting(db, 'phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER)).toBe(2000);
+  db.exec("INSERT INTO settings VALUES ('phash_bucket_cap','0'),('video_timeout_ms','0')");
+  expect(numericSetting(db, 'phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER)).toBe(0);
+  expect(() => mediaSetting(db, 'video_timeout_ms', 120000, 2147483647)).toThrow(
+    'Invalid video_timeout_ms'
+  );
+});

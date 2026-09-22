@@ -1,13 +1,10 @@
 import { spawn } from 'node:child_process';
 import type Database from 'better-sqlite3';
 import { dHash } from './hashing.js';
+import { numericSetting } from './matching-settings.js';
 
 export function mediaSetting(db: Database.Database, key: string, fallback: number, max: number) {
-  const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key) as
-    { value: string } | undefined;
-  const value = Number(row?.value ?? fallback);
-  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${key}`);
-  return value;
+  return numericSetting(db, key, fallback, max, 1);
 }
 
 // One slot per file, shared by exact hashing, decoding and thumbnail children.

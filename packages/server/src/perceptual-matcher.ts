@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { bandProbes, hamming, hashBands } from './hashing.js';
-import { mediaSetting } from './video.js';
+import { matchingSetting, numericSetting } from './matching-settings.js';
 
 type Image = { id: number; hash: Buffer; size: number; sha256: string | null };
 type Node = { parent: number; near: boolean };
@@ -12,16 +12,9 @@ export async function matchPerceptual(
   refresh: (id: number) => void,
   kind: 'image' | 'video'
 ) {
-  const frames = kind === 'image' ? 1 : mediaSetting(db, 'video_frame_count', 9, 64);
-  const setting = (key: string, fallback: number, max: number) => {
-    const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key) as
-      { value: string } | undefined;
-    const value = Number(row?.value ?? fallback);
-    if (!Number.isSafeInteger(value) || value < 0 || value > max) throw new Error(`Invalid ${key}`);
-    return value;
-  };
-  const cap = setting('phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER);
-  const threshold = setting(`${kind}_phash_threshold`, kind === 'image' ? 6 : 10, 64);
+  const frames = kind === 'image' ? 1 : matchingSetting(db, 'video_frame_count');
+  const cap = numericSetting(db, 'phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER);
+  const threshold = matchingSetting(db, `${kind}_phash_threshold`);
   let slice = performance.now();
   const pause = async () => {
     await yieldLoop();

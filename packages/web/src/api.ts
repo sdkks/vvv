@@ -11,6 +11,7 @@ import type {
   StartScanResponse,
   ScanErrorsResponse,
   Settings,
+  RetentionSettings,
   UpdateSettingsRequest,
   QuarantineResponse,
   RestoreResponse,
@@ -109,7 +110,7 @@ const jsonBody = (method: string, body: object): RequestInit => ({
 });
 export const getSettings = () => api<Settings>('/settings');
 export const updateSettings = (body: UpdateSettingsRequest) =>
-  api<Settings>('/settings', jsonBody('PATCH', body));
+  api<RetentionSettings>('/settings', jsonBody('PATCH', body));
 export const getTrash = (cursor = '') =>
   api<Page<TrashItem>>(`/trash?${new URLSearchParams({ cursor, limit: '50' })}`);
 export const quarantineFiles = (file_ids: number[]) =>

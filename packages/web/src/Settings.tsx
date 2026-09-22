@@ -1,18 +1,21 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Settings as Policy } from '@vvv/shared';
+import type { RetentionSettings, Settings as Policy } from '@vvv/shared';
 import { getSettings, updateSettings } from './api';
 import { policySummary, validRetention } from './trash-state';
 import { PageHeading } from './PageHeading';
+import { MatchingBehavior } from './MatchingBehavior';
 
 export function Settings() {
   const cache = useQueryClient();
   const query = useQuery({ queryKey: ['settings'], queryFn: getSettings, retry: false });
-  const [draft, setDraft] = useState<Policy>();
+  const [draft, setDraft] = useState<RetentionSettings>();
   const save = useMutation({
     mutationFn: updateSettings,
     onSuccess: (policy) => {
-      cache.setQueryData(['settings'], policy);
+      cache.setQueryData<Policy>(['settings'], (current) =>
+        current ? { ...current, ...policy } : undefined
+      );
       setDraft(undefined);
       void cache.invalidateQueries({ queryKey: ['trash'] });
     },
@@ -27,12 +30,17 @@ export function Settings() {
           {query.error.message} <button onClick={() => void query.refetch()}>Retry</button>
         </p>
       )}
+      {query.data && <MatchingBehavior matching={query.data.matching} />}
       {query.data && <p>{policySummary(query.data)}</p>}
       {policy && (
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (validRetention(policy.retention_days) && !save.isPending) save.mutate(policy);
+            if (validRetention(policy.retention_days) && !save.isPending)
+              save.mutate({
+                retention_days: policy.retention_days,
+                auto_purge_enabled: policy.auto_purge_enabled,
+              });
           }}
         >
           <label htmlFor="retention">Retention days (1–3650)</label>

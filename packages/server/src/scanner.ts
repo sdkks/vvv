@@ -5,7 +5,8 @@ import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
 import { imageHash, processFile, storeHashes } from './hashing.js';
-import { MediaWork, mediaSetting, videoHash } from './video.js';
+import { MediaWork, videoHash } from './video.js';
+import { matchingSetting } from './matching-settings.js';
 import {
   crossesBoundary,
   insideTrash,
@@ -281,9 +282,9 @@ export class Scanner {
                   } else
                     result = await videoHash(
                       path,
-                      mediaSetting(this.db, 'video_frame_count', 9, 64),
+                      matchingSetting(this.db, 'video_frame_count'),
                       {
-                        timeout: mediaSetting(this.db, 'video_timeout_ms', 600000, 2147483647),
+                        timeout: matchingSetting(this.db, 'video_timeout_ms'),
                         signal: this.abort.signal,
                       }
                     );

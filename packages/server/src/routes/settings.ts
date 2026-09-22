@@ -1,14 +1,18 @@
 import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
-import type { Settings, UpdateSettingsRequest } from '@vvv/shared';
+import type { RetentionSettings, Settings, UpdateSettingsRequest } from '@vvv/shared';
 import { retention } from '../quarantine.js';
+import { matchingSettings } from '../matching-settings.js';
 
 export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
-  const read = (): Settings => {
+  const read = (): RetentionSettings => {
     const { days, enabled } = retention(db);
     return { retention_days: days, auto_purge_enabled: enabled };
   };
-  app.get('/api/settings', async () => read());
+  app.get('/api/settings', async (): Promise<Settings> => ({
+    ...read(),
+    matching: matchingSettings(db),
+  }));
   app.patch<{ Body: UpdateSettingsRequest }>(
     '/api/settings',
     {

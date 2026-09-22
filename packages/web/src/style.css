@@ -202,7 +202,52 @@ summary {
   text-align: left;
   color: #475569;
 }
+.matching-card {
+  border: 1px solid #c5ced9;
+  border-radius: 0.35rem;
+  padding: 1rem;
+  margin-block: 1rem 2rem;
+}
+.matching-card h2 {
+  margin-top: 0;
+}
+.matching-method {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  border-top: 1px solid #c5ced9;
+  padding-block: 0.75rem;
+}
+.matching-method dt,
+.matching-method dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.matching-method .metadata {
+  display: block;
+}
+.matching-method p {
+  margin: 0 0 0.5rem;
+}
+.matching-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  background: #e7edf5;
+  color: #182230;
+  font-size: 0.85rem;
+}
+.matching-notice {
+  border-left: 3px solid #194b88;
+  padding: 0.75rem;
+  background: #f3f5f7;
+}
 @media (max-width: 600px) {
+  .matching-method {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
   .directory-preview thead {
     position: absolute;
     clip-path: inset(50%);
