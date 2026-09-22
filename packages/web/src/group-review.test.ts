@@ -17,6 +17,7 @@ import {
   groupsKey,
   isVideo,
   nextGroup,
+  nextMember,
   previousCursor,
   recoverGroups,
   reviewShortcut,
@@ -214,6 +215,15 @@ describe('cursor history', () => {
     expect(visitCursor([''], 'deep', 'later')).toEqual(['deep', 'later']);
     expect(visitCursor(['deep'], 'deep', '')).toEqual(['']);
   });
+});
+
+it('advances through loaded members and distinguishes a page boundary from the real end', () => {
+  expect(nextMember(0, 50, true)).toBe(1);
+  expect(nextMember(48, 50, true)).toBe(49);
+  expect(nextMember(49, 50, true)).toBe('load');
+  expect(nextMember(49, 60, false)).toBe(50);
+  expect(nextMember(59, 60, false)).toBe('end');
+  expect(nextMember(0, 0, false)).toBe('end');
 });
 
 describe('review shortcuts', () => {

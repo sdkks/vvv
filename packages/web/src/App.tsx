@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,6 +9,7 @@ import { Directories } from './Directories';
 import { Scan } from './Scan';
 import { Trash } from './Trash';
 import { Settings } from './Settings';
+import { PageHeading } from './PageHeading';
 
 function Login() {
   const [error, setError] = useState('');
@@ -38,7 +39,7 @@ function Login() {
   }
   return (
     <>
-      <h1>Sign in to VVV</h1>
+      <PageHeading>Sign in to VVV</PageHeading>
       {location.search && <p role="status">Please sign in to continue where you left off.</p>}
       <form
         onSubmit={(event) => {
@@ -105,7 +106,7 @@ function Shell() {
 function Home() {
   return (
     <>
-      <h1>Home</h1>
+      <PageHeading>Home</PageHeading>
       <p>Add directories, scan your media, then review duplicate groups.</p>
       <NavLink to="/directories">Set up scan directories</NavLink>
     </>
@@ -113,13 +114,8 @@ function Home() {
 }
 
 export function App() {
-  const location = useLocation();
-  const main = useRef<HTMLElement>(null);
-  useEffect(() => {
-    main.current?.focus();
-  }, [location.pathname]);
   return (
-    <main ref={main} tabIndex={-1}>
+    <main>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route element={<Shell />}>

@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addScanDir, getScanDirs, removeScanDir, updateScanDir } from './api';
+import { PageHeading } from './PageHeading';
 
 const options = [
   ['follow_symlinks', 'Follow symbolic links'],
@@ -21,7 +22,7 @@ export function Directories() {
   });
   return (
     <>
-      <h1>Scan directories</h1>
+      <PageHeading>Scan directories</PageHeading>
       <p id="directory-hint">
         Use paths as mounted inside the container, such as /media, not host paths.
       </p>

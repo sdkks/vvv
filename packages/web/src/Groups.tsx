@@ -181,10 +181,15 @@ export function Groups() {
         {query.data?.items.map((group) => (
           <li key={group.id}>
             <Link to={`/groups/${group.id}${groupsSearch(kind, cursor)}`}>
-              {group.kind} Group {group.id} · {group.member_count} members
-              <br />
-              {formatBytes(group.total_bytes)} total ·{' '}
-              <strong>{formatBytes(group.reclaimable_bytes)} reclaimable</strong>
+              <span>
+                <span className="group-kind">{group.kind}</span> Group {group.id}
+                <span className="metadata">
+                  {group.member_count} members · {formatBytes(group.total_bytes)} total
+                </span>
+              </span>
+              <strong className="reclaimable">
+                {formatBytes(group.reclaimable_bytes)} reclaimable
+              </strong>
             </Link>
           </li>
         ))}

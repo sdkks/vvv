@@ -14,6 +14,7 @@ import {
   applyRecovery,
   formatBytes,
   formatDuration,
+  nextMember,
   reviewShortcut,
   toggleMarked,
 } from './group-review';
@@ -87,6 +88,9 @@ export function GroupDetail({
     },
   });
   const list = useRef<HTMLUListElement>(null);
+  const paging = useRef(false);
+  const pendingFocus = useRef<number | null>(null);
+  const [memberNotice, setMemberNotice] = useState('');
   const navigate = useNavigate();
   const group = query.data?.pages[0];
   const members = (query.data?.pages.flatMap((page) => page.members.items) ?? []).filter(
@@ -111,6 +115,39 @@ export function GroupDetail({
   useEffect(() => {
     if (loaded) (list.current?.children[0] as HTMLElement | undefined)?.focus();
   }, [loaded]);
+  useEffect(() => {
+    if (query.isFetching || pendingFocus.current === null) return;
+    const index = pendingFocus.current;
+    pendingFocus.current = null;
+    (list.current?.children[index] as HTMLElement | undefined)?.focus();
+  }, [members.length, query.isFetching, query.dataUpdatedAt]);
+  function loadMore(advance = false) {
+    if (paging.current || query.isFetching || !query.hasNextPage) return;
+    paging.current = true;
+    if (advance) pendingFocus.current = members.length;
+    setMemberNotice('Loading more members…');
+    void query
+      .fetchNextPage()
+      .then((result) => {
+        setMemberNotice(
+          result.isError
+            ? 'Unable to load more members.'
+            : result.hasNextPage
+              ? ''
+              : 'End of members'
+        );
+      })
+      .finally(() => {
+        paging.current = false;
+      });
+  }
+  function next() {
+    if (paging.current || pendingFocus.current !== null) return;
+    const target = nextMember(active, members.length, query.hasNextPage);
+    if (target === 'load') loadMore(true);
+    else if (target === 'end') setMemberNotice('End of members');
+    else focus(target);
+  }
   function focus(index: number) {
     const next = Math.max(0, Math.min(members.length - 1, index));
     (list.current?.children[next] as HTMLElement | undefined)?.focus();
@@ -134,7 +171,7 @@ export function GroupDetail({
         );
         if (!action) return;
         event.preventDefault();
-        if (action === 'next') focus(active + 1);
+        if (action === 'next') next();
         if (action === 'previous') focus(active - 1);
         if (action === 'toggle') toggle();
         if (action === 'back') void navigate(back);
@@ -162,10 +199,13 @@ export function GroupDetail({
         <button disabled={active === 0} onClick={() => focus(active - 1)}>
           Previous member
         </button>
-        <button disabled={active >= members.length - 1} onClick={() => focus(active + 1)}>
+        <button disabled={active >= members.length - 1 && !query.hasNextPage} onClick={next}>
           Next member
         </button>
       </div>
+      <p role="status" aria-live="polite">
+        {memberNotice}
+      </p>
       <ul className="members" ref={list}>
         {members.map((member, index) => (
           <li
@@ -182,13 +222,20 @@ export function GroupDetail({
                   Reference
                 </strong>
               )}
-              <p>{member.path}</p>
-              <p>
+              <p className="file-path">{member.path}</p>
+              <p className="metadata">
                 {formatBytes(member.size)}
                 {member.width !== null &&
                   member.height !== null &&
                   ` · ${member.width}×${member.height}`}
                 {member.duration_ms !== null && ` · ${formatDuration(member.duration_ms)}`}
+              </p>
+              <p className="comparison">
+                {member.similarity === null
+                  ? 'Exact copy'
+                  : index > 0
+                    ? `Distance from reference: ${member.similarity}`
+                    : null}
               </p>
               <button
                 disabled={apply.isPending}
@@ -209,7 +256,7 @@ export function GroupDetail({
         ))}
       </ul>
       {query.hasNextPage && (
-        <button disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
+        <button disabled={query.isFetching} onClick={() => loadMore()}>
           Load more members
         </button>
       )}

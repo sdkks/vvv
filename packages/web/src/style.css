@@ -53,6 +53,38 @@ p,
 }
 .member-card > div {
   min-width: 0;
+  flex: 1 1 16rem;
+}
+h1[tabindex='-1'] {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 0.2rem;
+}
+nav [aria-current='page'] {
+  font-weight: 700;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 0.3em;
+}
+.metadata {
+  color: #475569;
+  font-size: 0.9rem;
+}
+.file-path {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.member-card p,
+.trash-list p {
+  margin-block: 0.4rem;
+}
+.member-card,
+.trash-list > li {
+  border: 1px solid #c5ced9;
+  border-radius: 0.35rem;
+  padding: 0.85rem;
+}
+.comparison {
+  font-weight: 600;
 }
 a {
   color: #194b88;
@@ -70,9 +102,33 @@ a {
   padding: 0;
 }
 .groups-list a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.8rem;
+  border-bottom: 1px solid #c5ced9;
+  text-decoration: none;
+}
+.groups-list a:hover {
+  background: #f3f5f7;
+}
+.groups-list .metadata {
   display: block;
-  padding-block: 1rem;
-  border-bottom: 1px solid #566273;
+}
+.group-kind {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.reclaimable {
+  font-size: 1.1rem;
+}
+.scan-progress {
+  display: block;
+  width: min(100%, 24rem);
+  height: 0.65rem;
+  accent-color: #194b88;
 }
 .thumbnail {
   width: 10rem;

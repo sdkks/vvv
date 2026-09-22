@@ -68,6 +68,10 @@ export function reviewShortcut(
   if (key === 'Enter') return 'apply';
   return key === 'Escape' ? 'back' : null;
 }
+export function nextMember(active: number, loaded: number, hasNextPage: boolean) {
+  if (active < loaded - 1) return active + 1;
+  return hasNextPage ? 'load' : 'end';
+}
 export function nextGroup(items: DuplicateGroup[], current: number, before = items, wrap = true) {
   const index = before.findIndex((item) => item.id === current);
   const ordered = [

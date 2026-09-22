@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Settings as Policy } from '@vvv/shared';
 import { getSettings, updateSettings } from './api';
 import { policySummary, validRetention } from './trash-state';
+import { PageHeading } from './PageHeading';
 
 export function Settings() {
   const cache = useQueryClient();
@@ -19,7 +20,7 @@ export function Settings() {
   const policy = draft ?? query.data;
   return (
     <>
-      <h1>Settings</h1>
+      <PageHeading>Settings</PageHeading>
       {query.isPending && <p role="status">Loading settings…</p>}
       {query.isError && (
         <p role="alert">

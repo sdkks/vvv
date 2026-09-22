@@ -5,6 +5,7 @@ import type { CurrentScanResponse, ScanProgress } from '@vvv/shared';
 import { cancelScan, getCurrentScan, getScanDirs, getScanErrors, startScan } from './api';
 import { elapsedScan, mergeScan, parseProgress, scanLabels, scanState } from './scan-state';
 import { previousCursor, visitCursor } from './group-review';
+import { PageHeading } from './PageHeading';
 
 const scanKey = ['scan-current'];
 export function Scan() {
@@ -63,7 +64,7 @@ export function Scan() {
   const cancelling = action.isSuccess && action.variables === id && state === 'running';
   return (
     <>
-      <h1>Scan</h1>
+      <PageHeading>Scan</PageHeading>
       {query.isPending && <p role="status">Loading scan…</p>}
       {query.isError && (
         <p role="alert">
@@ -87,14 +88,28 @@ export function Scan() {
         )}
         {scan && (
           <>
+            {(state === 'running' || (state === 'done' && scan.discovered > 0)) && (
+              <progress
+                className="scan-progress"
+                aria-label="Files processed out of discovered files"
+                max={Math.max(1, scan.discovered)}
+                value={
+                  scan.discovered > 0 && (state === 'done' || scan.current_file)
+                    ? scan.processed
+                    : undefined
+                }
+              />
+            )}
             <p>
               {scan.processed} processed · {scan.discovered} discovered · {scan.errors} errors
             </p>
-            <p>Elapsed: {elapsedScan(scan, now)}</p>
+            <p className="metadata">Elapsed: {elapsedScan(scan, now)}</p>
             {state === 'running' && (
               <>
                 <p>Discovering and processing files — total may grow. No percentage estimate.</p>
-                <p>Current file: {scan.current_file ?? 'Discovering files or waiting for work…'}</p>
+                <p className="metadata">
+                  Current file: {scan.current_file ?? 'Discovering files or waiting for work…'}
+                </p>
               </>
             )}
           </>

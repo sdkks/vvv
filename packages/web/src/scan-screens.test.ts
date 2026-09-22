@@ -67,6 +67,33 @@ it.each([
     } else expect(html).toContain('Elapsed: 0:00:45');
   }
 );
+it('uses indeterminate discovery and determinate processing/completion without inventing a zero total', () => {
+  const scan: Exclude<CurrentScanResponse, null> = {
+    id: 1,
+    status: 'running',
+    started_at: '2026-09-21 12:00:00',
+    discovered: 12,
+    processed: 8,
+    errors: 0,
+  };
+  const discovering = render(Scan, scan);
+  expect(discovering).toMatch(/<progress[^>]*max="12"><\/progress>/);
+  expect(discovering).toContain(
+    'Discovering and processing files — total may grow. No percentage estimate.'
+  );
+  expect(render(Scan, { ...scan, current_file: '/media/a.jpg' })).toMatch(
+    /<progress[^>]*max="12" value="8">/
+  );
+  expect(render(Scan, { ...scan, status: 'done', processed: 12 })).toMatch(
+    /<progress[^>]*max="12" value="12">/
+  );
+  expect(render(Scan, { ...scan, discovered: 0, processed: 0 })).not.toContain('value="0"');
+  expect(render(Scan, { ...scan, status: 'done', discovered: 0, processed: 0 })).not.toContain(
+    '<progress'
+  );
+  expect(render(Scan, null)).not.toContain('<progress');
+});
+
 it('renders directory guidance, independent toggles, catalog count and removal', () => {
   const empty = render(Directories, null, []);
   expect(empty).toContain('inside the container');

@@ -5,6 +5,7 @@ import type { PurgeResponse, RestoreResponse } from '@vvv/shared';
 import { getSettings, getTrash, purgeTrash, restoreTrash } from './api';
 import { formatBytes, previousCursor, toggleMarked, visitCursor } from './group-review';
 import { displayDate, fileFailure, policySummary, purgeAfter } from './trash-state';
+import { PageHeading } from './PageHeading';
 
 export function Trash() {
   const [search, setSearch] = useSearchParams();
@@ -38,7 +39,7 @@ export function Trash() {
   const previous = previousCursor(history, cursor);
   return (
     <>
-      <h1>Trash</h1>
+      <PageHeading>Trash</PageHeading>
       {policy.data && <p>{policySummary(policy.data)}</p>}
       {policy.isError && (
         <p role="alert">
@@ -67,7 +68,7 @@ export function Trash() {
           ; {action.data.failed.length} failed.
         </p>
       )}
-      <ul className="scan-list">
+      <ul className="scan-list trash-list">
         {items.map((item) => (
           <li key={item.id}>
             <label className="scan-option">
@@ -77,9 +78,9 @@ export function Trash() {
                 checked={selected.has(item.id)}
                 onChange={() => setSelected(toggleMarked(selected, item.id))}
               />
-              <span>{item.path}</span>
+              <span className="file-path">{item.path}</span>
             </label>
-            <p>
+            <p className="metadata">
               {formatBytes(item.size)} · Quarantined: {displayDate(item.quarantined_at)}
               <br />
               Purge after: {purgeAfter(item.purge_after)}
