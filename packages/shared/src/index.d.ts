@@ -132,8 +132,10 @@ export interface ExportResponse {
 export type MatchingMethod = {
   label: string;
   scope: string;
-  enabled: true;
-} & ({ id: 'exact'; threshold: null } | { id: 'image_dhash' | 'video_dhash'; threshold: number });
+} & (
+  | { id: 'exact'; enabled: true; threshold: null }
+  | { id: 'image_dhash' | 'video_dhash'; enabled: boolean; threshold: number }
+);
 export interface FileSizePolicy {
   /** Inclusive MiB limits; zero disables that bound. */
   min_file_size_mb: number;
@@ -152,6 +154,8 @@ export interface Settings extends RetentionSettings {
   matching: MatchingSettings;
 }
 export interface MatchingControls extends FileSizePolicy {
+  match_images_enabled: boolean;
+  match_videos_enabled: boolean;
   image_phash_threshold: number;
   video_phash_threshold: number;
   video_frame_count: number;
@@ -160,6 +164,8 @@ export interface MatchingControls extends FileSizePolicy {
 export type UpdateSettingsRequest = Partial<RetentionSettings & MatchingControls>;
 export type SettingsConsequence =
   | { type: 'rematch_required'; reason: 'threshold_change' }
+  | { type: 'rematch_required'; reason: 'match_enabled'; kind: 'image' | 'video' }
+  | { type: 'match_enabled' | 'match_disabled'; kind: 'image' | 'video'; message: string }
   | { type: 'rescan_required'; reason: 'frame_count_change' }
   | { type: 'future_sampling_only'; reason: 'timeout_change' }
   | { type: 'next_scan_required'; reason: 'size_filter_change' };

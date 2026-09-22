@@ -164,8 +164,11 @@ export function parseMetadata(bytes: Buffer) {
     throw new VideoFailure('no_video_stream');
   return { width: width!, height: height!, duration, duration_ms: Math.round(duration * 1000) };
 }
+export async function videoMetadata(path: string, options: Options) {
+  return parseMetadata(await output('ffprobe', probeArgs(path), options));
+}
 export async function videoHash(path: string, frames: number, options: Options) {
-  const metadata = parseMetadata(await output('ffprobe', probeArgs(path), options));
+  const metadata = await videoMetadata(path, options);
   const hashes: Buffer[] = [];
   let remainder = Buffer.alloc(0);
   try {

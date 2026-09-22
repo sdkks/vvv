@@ -17,7 +17,11 @@ import * as video from './video.js';
 vi.mock('./hashing.js', { spy: true });
 vi.mock('./video.js', async (importOriginal) => {
   const original = await importOriginal<typeof video>();
-  return { ...original, videoHash: vi.fn(original.videoHash) };
+  return {
+    ...original,
+    videoHash: vi.fn(original.videoHash),
+    videoMetadata: vi.fn(original.videoMetadata),
+  };
 });
 vi.mock('node:fs/promises', { spy: true });
 const realFs = await vi.importActual<typeof fs>('node:fs/promises');
@@ -690,6 +694,111 @@ it.each(['cancel', 'shutdown'])(
     expect(scanner.current()).toMatchObject({ errors: 0, processed: 0 });
   }
 );
+
+it.each(['image', 'video'] as const)(
+  'skips %s perceptual work, retains metadata and backfills only after enable without SHA',
+  async (kind) => {
+    seed();
+    const image = join(media, 'image.png');
+    await sharp({ create: { width: 18, height: 16, channels: 3, background: 'white' } })
+      .png()
+      .toFile(image);
+    await put('clip.mp4');
+    vi.mocked(video.videoMetadata).mockResolvedValue({
+      width: 320,
+      height: 240,
+      duration: 2,
+      duration_ms: 2000,
+    });
+    const setEnabled = (enabled: boolean) =>
+      db
+        .prepare('INSERT OR REPLACE INTO settings VALUES (?,?)')
+        .run(`match_${kind}s_enabled`, enabled ? '1' : '0');
+    setEnabled(false);
+    const perceptual = kind === 'image' ? hashing.imageHash : video.videoHash;
+    const metadata = kind === 'image' ? hashing.imageMetadata : video.videoMetadata;
+    await scan();
+    expect(perceptual).not.toHaveBeenCalled();
+    expect(metadata).toHaveBeenCalledTimes(1);
+    const row = db
+      .prepare('SELECT id,status,sha256,width,height,duration_ms FROM files WHERE kind=?')
+      .get(kind) as { id: number; sha256: string };
+    expect(row).toMatchObject({
+      status: 'done',
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      width: kind === 'image' ? 18 : 320,
+      height: kind === 'image' ? 16 : 240,
+      duration_ms: kind === 'image' ? null : 2000,
+    });
+    expect(db.prepare('SELECT count(*) AS n FROM phashes WHERE file_id=?').get(row.id)).toEqual({
+      n: 0,
+    });
+    expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({
+      n: kind === 'image' ? 9 : 1,
+    });
+    hash.mockClear();
+    vi.mocked(metadata).mockClear();
+    await scan();
+    expect(perceptual).not.toHaveBeenCalled();
+    expect(metadata).not.toHaveBeenCalled();
+    expect(hash).not.toHaveBeenCalled();
+    setEnabled(true);
+    await scan();
+    expect(hash).not.toHaveBeenCalled();
+    expect(perceptual).toHaveBeenCalledTimes(1);
+    expect(db.prepare('SELECT count(*) AS n FROM phashes WHERE file_id=?').get(row.id)).toEqual({
+      n: kind === 'image' ? 1 : 9,
+    });
+    expect(db.prepare('SELECT sha256 FROM files WHERE id=?').get(row.id)).toEqual({
+      sha256: row.sha256,
+    });
+    vi.mocked(perceptual).mockClear();
+    await scan();
+    expect(perceptual).not.toHaveBeenCalled();
+  }
+);
+
+it('uses the scan-start switches even when a switch changes before traversal finishes', async () => {
+  seed();
+  await put('clip.mp4');
+  vi.mocked(video.videoMetadata).mockResolvedValue({
+    width: 320,
+    height: 240,
+    duration: 2,
+    duration_ms: 2000,
+  });
+  db.exec("INSERT INTO settings VALUES ('match_videos_enabled','0')");
+  scanner.start();
+  db.exec("UPDATE settings SET value='1' WHERE key='match_videos_enabled'");
+  await finished();
+  expect(video.videoHash).not.toHaveBeenCalled();
+  expect(video.videoMetadata).toHaveBeenCalledTimes(1);
+  hash.mockClear();
+  await scan();
+  expect(video.videoHash).toHaveBeenCalledTimes(1);
+  expect(hash).not.toHaveBeenCalled();
+});
+
+it('removes stale perceptual hashes when a file changes while its kind is disabled', async () => {
+  seed();
+  await put('clip.mp4');
+  await scan();
+  db.exec("INSERT INTO settings VALUES ('match_videos_enabled','0')");
+  await put('clip.mp4', 'changed content');
+  vi.mocked(video.videoMetadata).mockResolvedValue({
+    width: 320,
+    height: 240,
+    duration: 2,
+    duration_ms: 2000,
+  });
+  vi.mocked(video.videoHash).mockClear();
+  hash.mockClear();
+  await scan();
+  expect(video.videoHash).not.toHaveBeenCalled();
+  expect(hash).toHaveBeenCalledTimes(1);
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 0 });
+});
 
 it('backfills videos from an exact-only catalog without rehashing and applies settings', async () => {
   seed();

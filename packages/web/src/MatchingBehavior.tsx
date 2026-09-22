@@ -18,13 +18,20 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
   return (
     <section className="matching-card" aria-labelledby="matching-heading">
       <h2 id="matching-heading">Matching behavior</h2>
-      <p>Read-only information. All three methods are always on for their file types.</p>
+      <p>
+        Exact matching is always on. Enable or disable perceptual methods in Advanced matching
+        controls.
+      </p>
       <dl className="matching-methods">
         {matching.methods.map((method) => (
           <div className="matching-method" key={method.id}>
             <dt>
               <strong>{method.label}</strong>
-              <span className="metadata">{method.scope} · Always on</span>
+              <span className="metadata">
+                {method.scope}
+                {method.id === 'exact' ? ' · Always on' : ''}
+              </span>
+              <span className="matching-badge">{method.enabled ? 'Enabled' : 'Off'}</span>
             </dt>
             <dd>
               <p>

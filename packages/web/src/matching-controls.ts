@@ -3,6 +3,7 @@ import type {
   MatchingControls,
   MatchingSettings,
   SettingsConsequence,
+  UpdateSettingsRequest,
 } from '@vvv/shared';
 
 export const matchingFields = [
@@ -13,7 +14,18 @@ export const matchingFields = [
   { key: 'min_file_size_mb', label: 'Min file size (MiB)', min: 0, max: Number.MAX_SAFE_INTEGER },
   { key: 'max_file_size_mb', label: 'Max file size (MiB)', min: 0, max: Number.MAX_SAFE_INTEGER },
 ] as const;
-export type MatchingDraft = Record<keyof MatchingControls, string>;
+export const matchingToggles = [
+  { key: 'match_images_enabled', kind: 'image', label: 'Image perceptual matching' },
+  { key: 'match_videos_enabled', kind: 'video', label: 'Video perceptual matching' },
+] as const;
+type NumericKey = (typeof matchingFields)[number]['key'];
+export type MatchingDraft = Record<NumericKey, string> &
+  Pick<MatchingControls, (typeof matchingToggles)[number]['key']>;
+export function disabledMatchingKind(key: NumericKey, draft: MatchingDraft) {
+  if (key === 'image_phash_threshold' && !draft.match_images_enabled) return 'image';
+  if (key.startsWith('video_') && !draft.match_videos_enabled) return 'video';
+  return undefined;
+}
 export const isSizeField = (key: keyof MatchingControls) =>
   key === 'min_file_size_mb' || key === 'max_file_size_mb';
 export function sizePolicyLabel({ min_file_size_mb: min, max_file_size_mb: max }: FileSizePolicy) {
@@ -27,6 +39,8 @@ export function sizePolicyLabel({ min_file_size_mb: min, max_file_size_mb: max }
 }
 export function matchingDraft(settings: MatchingSettings): MatchingDraft {
   return {
+    match_images_enabled: settings.methods.some((m) => m.id === 'image_dhash' && m.enabled),
+    match_videos_enabled: settings.methods.some((m) => m.id === 'video_dhash' && m.enabled),
     image_phash_threshold: String(settings.methods.find((m) => m.id === 'image_dhash')?.threshold),
     video_phash_threshold: String(settings.methods.find((m) => m.id === 'video_dhash')?.threshold),
     video_frame_count: String(settings.video_frame_count),
@@ -41,9 +55,10 @@ function timeoutMilliseconds(seconds: string): number {
   // Scale the decimal parts separately to avoid fractional milliseconds from floating-point error.
   return Number(whole) * 1000 + Number(fraction.padEnd(3, '0'));
 }
-export function matchingErrors(draft: MatchingDraft): Partial<MatchingDraft> {
-  const errors: Partial<MatchingDraft> = Object.fromEntries(
-    matchingFields.flatMap<[keyof MatchingDraft, string]>(({ key, min, max }) => {
+export function matchingErrors(draft: MatchingDraft): Partial<Record<keyof MatchingDraft, string>> {
+  const errors: Partial<Record<keyof MatchingDraft, string>> = Object.fromEntries(
+    matchingFields.flatMap<[NumericKey, string]>(({ key, min, max }) => {
+      if (disabledMatchingKind(key, draft)) return [];
       if (key === 'video_timeout_ms') {
         const ms = timeoutMilliseconds(draft[key]);
         return Number.isInteger(ms) && ms >= min * 1000 && ms <= max * 1000
@@ -63,18 +78,45 @@ export function matchingErrors(draft: MatchingDraft): Partial<MatchingDraft> {
     errors.max_file_size_mb = 'Maximum must be at least minimum when both are enabled.';
   return errors;
 }
-export function matchingPayload(draft: MatchingDraft): MatchingControls {
+export function matchingPayload(draft: MatchingDraft): UpdateSettingsRequest {
   return {
-    image_phash_threshold: Number(draft.image_phash_threshold),
-    video_phash_threshold: Number(draft.video_phash_threshold),
-    video_frame_count: Number(draft.video_frame_count),
-    video_timeout_ms: timeoutMilliseconds(draft.video_timeout_ms),
+    match_images_enabled: draft.match_images_enabled,
+    match_videos_enabled: draft.match_videos_enabled,
+    ...(draft.match_images_enabled
+      ? { image_phash_threshold: Number(draft.image_phash_threshold) }
+      : {}),
+    ...(draft.match_videos_enabled
+      ? {
+          video_phash_threshold: Number(draft.video_phash_threshold),
+          video_frame_count: Number(draft.video_frame_count),
+          video_timeout_ms: timeoutMilliseconds(draft.video_timeout_ms),
+        }
+      : {}),
     // Empty inputs explicitly disable persisted limits rather than leaving old bounds in place.
     min_file_size_mb: Number(draft.min_file_size_mb),
     max_file_size_mb: Number(draft.max_file_size_mb),
   };
 }
-export const consequenceMessages: Record<SettingsConsequence['type'], string> = {
+export function consequenceMessage(consequence: SettingsConsequence) {
+  if ('message' in consequence) return consequence.message;
+  if (consequence.reason === 'match_enabled')
+    return `Re-match ${consequence.kind} files after the next scan completes. Scans automatically start matching.`;
+  return consequenceMessages[consequence.type];
+}
+export function mergeConsequences(current: SettingsConsequence[], next: SettingsConsequence[]) {
+  return [
+    ...current.filter(
+      (previous) =>
+        !next.some((incoming) =>
+          'kind' in previous && 'kind' in incoming
+            ? previous.kind === incoming.kind
+            : !('kind' in previous) && !('kind' in incoming) && previous.type === incoming.type
+        )
+    ),
+    ...next,
+  ];
+}
+export const consequenceMessages = {
   rematch_required: 'Results use the previous thresholds. Re-match to apply.',
   rescan_required:
     'Videos will be re-sampled on the next scan. Re-match becomes available after that scan completes.',

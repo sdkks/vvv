@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { bandProbes, hamming, hashBands } from './hashing.js';
-import { matchingSetting, numericSetting } from './matching-settings.js';
+import { matchingEnabled, matchingSetting, numericSetting } from './matching-settings.js';
 
 type Image = { id: number; hash: Buffer; size: number; sha256: string | null };
 type Node = { parent: number; near: boolean };
@@ -12,6 +12,7 @@ export async function matchPerceptual(
   refresh: (id: number) => void,
   kind: 'image' | 'video'
 ) {
+  if (!matchingEnabled(db, kind)) return { candidate_pairs: 0, skipped_buckets: [] };
   const frames = kind === 'image' ? 1 : matchingSetting(db, 'video_frame_count');
   const cap = numericSetting(db, 'phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER);
   const threshold = matchingSetting(db, `${kind}_phash_threshold`);

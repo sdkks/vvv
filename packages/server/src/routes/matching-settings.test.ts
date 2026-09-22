@@ -84,6 +84,88 @@ it.each([
   }
   for (const value of [min, max]) expect((await patch({ [key]: value })).statusCode).toBe(200);
 });
+it.each(['image', 'video'] as const)(
+  'strictly validates and persists the %s switch with change-only consequences and auth',
+  async (kind) => {
+    const key = `match_${kind}s_enabled`;
+    for (const value of [0, 1, 'true', 'false', '0', null, [], {}]) {
+      expect((await patch({ [key]: value, retention_days: 12 })).statusCode).toBe(400);
+      expect((await get()).json<Settings>().retention_days).toBe(30);
+    }
+    expect(
+      (await app.inject({ method: 'PATCH', url: '/api/settings', payload: { [key]: false } }))
+        .statusCode
+    ).toBe(401);
+    expect((await app.inject('/api/settings')).statusCode).toBe(401);
+    expect((await patch({ match_exact_enabled: false })).statusCode).toBe(400);
+    expect((await patch({ [key]: true })).json<UpdateSettingsResponse>().consequences).toEqual([]);
+    const before = catalog();
+    const disabled = (await patch({ [key]: false })).json<UpdateSettingsResponse>();
+    expect(disabled.consequences).toEqual([
+      {
+        type: 'match_disabled',
+        kind,
+        message: `Future scans skip ${kind} perceptual hashing; existing ${kind} groups remain until re-match; re-match removes them.`,
+      },
+    ]);
+    expect(disabled.matching.methods.find((m) => m.id === `${kind}_dhash`)?.enabled).toBe(false);
+    expect(disabled.matching.methods.find((m) => m.id === 'exact')?.enabled).toBe(true);
+    expect((await patch({ [key]: false })).json<UpdateSettingsResponse>().consequences).toEqual([]);
+    await app.close();
+    app = await createServer({ ...config, dataDir: root }, false);
+    expect(
+      (await get()).json<Settings>().matching.methods.find((m) => m.id === `${kind}_dhash`)?.enabled
+    ).toBe(false);
+    expect((await patch({ [key]: true })).json<UpdateSettingsResponse>().consequences).toEqual([
+      {
+        type: 'match_enabled',
+        kind,
+        message: `Existing ${kind} files will be analyzed on the next scan (no content re-hashing).`,
+      },
+      { type: 'rematch_required', reason: 'match_enabled', kind },
+    ]);
+    expect(catalog()).toEqual(before);
+  }
+);
+it.each(['image', 'video'] as const)(
+  're-match skips disabled %s candidates without losing exact or other-kind groups',
+  async (kind) => {
+    for (const mediaKind of ['image', 'video']) {
+      const a = file(mediaKind),
+        b = file(mediaKind);
+      file(mediaKind);
+      db.prepare('UPDATE files SET sha256=? WHERE id IN (?,?)').run(`exact-${mediaKind}`, a, b);
+      const missing = file(mediaKind);
+      storeHashes(db, missing, []);
+    }
+    await match();
+    expect((await get(`/api/groups?kind=${kind}`)).json<GroupsResponse>().items).toHaveLength(1);
+    const before = catalog();
+    expect((await patch({ [`match_${kind}s_enabled`]: false })).statusCode).toBe(200);
+    expect((await get(`/api/groups?kind=${kind}`)).json<GroupsResponse>().items).toHaveLength(1);
+    await match();
+    expect((await get(`/api/groups?kind=${kind}`)).json<GroupsResponse>().items).toEqual([]);
+    expect(
+      (await get(`/api/groups?kind=${kind === 'image' ? 'video' : 'image'}`)).json<GroupsResponse>()
+        .items
+    ).toHaveLength(1);
+    expect((await get('/api/groups?kind=exact')).json<GroupsResponse>().items).toHaveLength(2);
+    expect(catalog()).toEqual(before);
+    await patch({ match_images_enabled: false, match_videos_enabled: false });
+    await match();
+    expect(db.prepare('SELECT candidate_pairs,skipped_buckets FROM match_runs').get()).toEqual({
+      candidate_pairs: 0,
+      skipped_buckets: '[]',
+    });
+    expect(
+      (await get('/api/groups')).json<GroupsResponse>().items.every((g) => g.kind === 'exact')
+    ).toBe(true);
+    await patch({ match_images_enabled: true, match_videos_enabled: true });
+    await match();
+    expect((await get('/api/groups?kind=image')).json<GroupsResponse>().items).toHaveLength(1);
+    expect((await get('/api/groups?kind=video')).json<GroupsResponse>().items).toHaveLength(1);
+  }
+);
 it('validates merged size ranges atomically and persists explicit disabling with consequences', async () => {
   const video = file('video', 'excluded');
   const before = catalog();
@@ -236,6 +318,9 @@ it('rejects conflicting changes during active work before any partial write', as
   db.exec("UPDATE scans SET status='done'; INSERT INTO match_runs(status) VALUES ('building')");
   expect((await patch({ image_phash_threshold: 2, retention_days: 1 })).statusCode).toBe(409);
   expect((await patch({ video_frame_count: 2 })).statusCode).toBe(409);
+  expect((await patch({ match_images_enabled: false, retention_days: 1 })).statusCode).toBe(409);
+  expect((await patch({ match_videos_enabled: false })).statusCode).toBe(409);
+  expect((await patch({ match_videos_enabled: true })).statusCode).toBe(200);
   expect((await get()).json<Settings>()).toMatchObject({
     retention_days: 30,
     matching: { video_frame_count: 9 },

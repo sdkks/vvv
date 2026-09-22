@@ -35,6 +35,10 @@ export function hamming(a: Uint8Array, b: Uint8Array): number {
   }
   return distance;
 }
+export async function imageMetadata(path: string) {
+  const { width, height } = await sharp(path).metadata();
+  return { width, height };
+}
 export async function imageHash(path: string) {
   const image = sharp(path);
   const { width, height } = await image.metadata();

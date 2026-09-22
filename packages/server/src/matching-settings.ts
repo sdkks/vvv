@@ -2,6 +2,8 @@ import type Database from 'better-sqlite3';
 import type { FileSizePolicy, MatchingSettings } from '@vvv/shared';
 
 const defaults = {
+  match_images_enabled: { value: 1, min: 0, max: 1 },
+  match_videos_enabled: { value: 1, min: 0, max: 1 },
   image_phash_threshold: { value: 6, min: 0, max: 64 },
   video_phash_threshold: { value: 10, min: 0, max: 64 },
   video_frame_count: { value: 9, min: 1, max: 64 },
@@ -27,6 +29,10 @@ export function numericSetting(
 export function matchingSetting(db: Database.Database, key: keyof typeof defaults) {
   const { value, min, max } = defaults[key];
   return numericSetting(db, key, value, max, min);
+}
+
+export function matchingEnabled(db: Database.Database, kind: 'image' | 'video') {
+  return matchingSetting(db, `match_${kind}s_enabled`) === 1;
 }
 
 export function validSizeRange({ min_file_size_mb: min, max_file_size_mb: max }: FileSizePolicy) {
@@ -57,14 +63,14 @@ export function matchingSettings(db: Database.Database): MatchingSettings {
         id: 'image_dhash',
         label: 'Near-duplicate images (perceptual dHash)',
         scope: 'image files',
-        enabled: true,
+        enabled: matchingEnabled(db, 'image'),
         threshold: matchingSetting(db, 'image_phash_threshold'),
       },
       {
         id: 'video_dhash',
         label: 'Near-duplicate videos (frame perceptual dHash)',
         scope: 'video files',
-        enabled: true,
+        enabled: matchingEnabled(db, 'video'),
         threshold: matchingSetting(db, 'video_phash_threshold'),
       },
     ],

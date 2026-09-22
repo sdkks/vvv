@@ -102,7 +102,8 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(html.indexOf('Matching behavior')).toBeLessThan(html.indexOf('Retention days'));
   for (const method of policy.matching.methods) {
     expect(section).toContain(method.label);
-    expect(section).toContain(`${method.scope} · Always on`);
+    expect(section).toContain(method.scope);
+    if (method.id === 'exact') expect(section).toContain(`${method.scope} · Always on`);
   }
   expect(section).toContain('Identical content hashes; no similarity threshold');
   expect(section).toContain('Hamming distance ≤ 6');
@@ -111,7 +112,8 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(section).toContain('Sampling timeout: 10 minutes');
   expect(section.match(/class="matching-badge">Default/g)).toHaveLength(5);
   expect(section).not.toContain('>Current<');
-  expect(section).toContain('Read-only information');
+  expect(section).toContain('Exact matching is always on');
+  expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(3);
   expect(section).toContain('Size filter: disabled');
   expect(section).toContain(
     'No AI or neural methods are used. Matching runs entirely locally: SHA-256 content hashes and perceptual dHash comparisons.'
@@ -137,6 +139,21 @@ it('keeps matching controls in a separate disclosure with labels, units, discard
   expect(html).toContain('Matching controls match saved values');
   expect(html).toContain('role="status" aria-live="polite"');
   expect(html).toContain('not SHA-256 checkpoints');
+});
+it('shows Enabled and Off badges for saved switches while exact stays always on', () => {
+  const html = render(Settings, [], {
+    ...policy,
+    matching: {
+      ...policy.matching,
+      methods: policy.matching.methods.map((m) =>
+        m.id === 'exact' ? m : { ...m, enabled: false }
+      ),
+    },
+  });
+  const section = html.slice(html.indexOf('<section'), html.indexOf('</section>'));
+  expect(section.match(/class="matching-badge">Off/g)).toHaveLength(2);
+  expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(1);
+  expect(section).toContain('all files · Always on');
 });
 it('shows Current badges independently for customized thresholds and sampling values', () => {
   const html = render(Settings, [], {

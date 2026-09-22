@@ -11,6 +11,8 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 it.each([
+  ['match_images_enabled', 1, 0, 1],
+  ['match_videos_enabled', 1, 0, 1],
   ['image_phash_threshold', 6, 0, 64],
   ['video_phash_threshold', 10, 0, 64],
   ['video_frame_count', 9, 1, 64],

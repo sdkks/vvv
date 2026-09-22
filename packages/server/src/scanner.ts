@@ -4,9 +4,9 @@ import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
 import type { FileSizePolicy, ScanProgress } from '@vvv/shared';
-import { imageHash, processFile, storeHashes } from './hashing.js';
-import { MediaWork, videoHash } from './video.js';
-import { fileSizeSettings, matchingSetting } from './matching-settings.js';
+import { imageHash, imageMetadata, processFile, storeHashes } from './hashing.js';
+import { MediaWork, videoHash, videoMetadata } from './video.js';
+import { fileSizeSettings, matchingEnabled, matchingSetting } from './matching-settings.js';
 import { refreshFileGroups } from './matcher.js';
 import {
   crossesBoundary,
@@ -37,6 +37,7 @@ export class Scanner {
   private task?: Promise<void>;
   private currentFile?: string;
   private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
+  private perceptual = { image: true, video: true };
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
@@ -65,8 +66,12 @@ export class Scanner {
   }
   start(): number | null {
     if (this.task) return null;
-    // Saving new limits never changes eligibility partway through a running scan.
+    // Size limits and method switches apply to the next scan, never partway through this one.
     this.sizes = fileSizeSettings(this.db);
+    this.perceptual = {
+      image: matchingEnabled(this.db, 'image'),
+      video: matchingEnabled(this.db, 'video'),
+    };
     const id = Number(
       this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
     );
@@ -121,12 +126,16 @@ export class Scanner {
     this.db.transaction(() => {
       const previous = this.db
         .prepare(
-          `SELECT size,mtime_ns,CASE WHEN status='done'
+          `SELECT size,mtime_ns,CASE WHEN status='done' AND ?
           AND NOT EXISTS (SELECT 1 FROM phashes WHERE file_id=files.id AND frame_idx=0)
           THEN 'hashed' ELSE status END AS status FROM files WHERE scan_dir_id=? AND rel_path=?`
         )
         .safeIntegers()
-        .get(dir.id, path) as { size: bigint; mtime_ns: bigint; status: string } | undefined;
+        .get(
+          Number(kind === 'image' ? this.perceptual.image : this.perceptual.video),
+          dir.id,
+          path
+        ) as { size: bigint; mtime_ns: bigint; status: string } | undefined;
       const unchanged = previous?.size === size && previous.mtime_ns === mtime;
       const exclusion = error ? null : sizeExclusion(size, this.sizes);
       const completed = !exclusion && unchanged && previous.status === 'done';
@@ -287,13 +296,23 @@ export class Scanner {
                       .run(sha, file.id);
                   }
                   if (file.kind === 'image') {
-                    const image = await imageHash(path);
-                    result = { ...image, hashes: [image.hash] };
-                  } else
-                    result = await videoHash(path, matchingSetting(this.db, 'video_frame_count'), {
+                    if (this.perceptual.image) {
+                      const image = await imageHash(path);
+                      result = { ...image, hashes: [image.hash] };
+                    } else result = { ...(await imageMetadata(path)), hashes: [] };
+                  } else {
+                    const options = {
                       timeout: matchingSetting(this.db, 'video_timeout_ms'),
                       signal: this.abort.signal,
-                    });
+                    };
+                    result = this.perceptual.video
+                      ? await videoHash(
+                          path,
+                          matchingSetting(this.db, 'video_frame_count'),
+                          options
+                        )
+                      : { ...(await videoMetadata(path, options)), hashes: [] };
+                  }
                 } catch (cause) {
                   if (this.abort.signal.aborted) return;
                   error = message(cause);

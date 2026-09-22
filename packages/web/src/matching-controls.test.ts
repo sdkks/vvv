@@ -12,6 +12,8 @@ import {
   matchingErrors,
   matchingFields,
   matchingPayload,
+  mergeConsequences,
+  consequenceMessage,
   type MatchingDraft,
 } from './matching-controls';
 import { SettingsValidationError, updateSettings } from './api';
@@ -22,6 +24,8 @@ vi.mock('react', async (importOriginal) => {
 });
 
 const draft: MatchingDraft = {
+  match_images_enabled: true,
+  match_videos_enabled: true,
   image_phash_threshold: '6',
   video_phash_threshold: '10',
   video_frame_count: '9',
@@ -83,6 +87,8 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     max_file_size_mb: 0,
   });
   expect(result).toEqual({
+    match_images_enabled: true,
+    match_videos_enabled: true,
     image_phash_threshold: '0',
     video_phash_threshold: '64',
     video_frame_count: '1',
@@ -91,6 +97,8 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     max_file_size_mb: '',
   });
   expect(matchingPayload(result)).toEqual({
+    match_images_enabled: true,
+    match_videos_enabled: true,
     image_phash_threshold: 0,
     video_phash_threshold: 64,
     video_frame_count: 1,
@@ -178,7 +186,7 @@ const matching: MatchingSettings = {
   min_file_size_mb: 0,
   max_file_size_mb: 0,
 };
-function renderConsequences(consequences: SettingsConsequence[]) {
+function renderConsequences(consequences: SettingsConsequence[], settings = matching) {
   vi.mocked(React.useState)
     .mockReturnValueOnce([undefined, vi.fn()])
     .mockReturnValueOnce([false, vi.fn()])
@@ -188,7 +196,7 @@ function renderConsequences(consequences: SettingsConsequence[]) {
     React.createElement(
       QueryClientProvider,
       { client },
-      React.createElement(AdvancedMatching, { matching })
+      React.createElement(AdvancedMatching, { matching: settings })
     )
   );
   client.clear();
@@ -208,6 +216,71 @@ it('offers Re-match now for a threshold-only change', () => {
   expect(html).toContain(consequenceMessages.rematch_required);
   expect(html).toContain('<button>Re-match now</button>');
   expect(html).not.toContain(consequenceMessages.rescan_required);
+});
+it('renders off controls disabled with explanations and never provides an exact switch', () => {
+  const off = {
+    ...matching,
+    methods: matching.methods.map((m) => (m.id === 'exact' ? m : { ...m, enabled: false })),
+  };
+  const html = renderConsequences([], off);
+  expect(html.match(/type="checkbox"/g)).toHaveLength(2);
+  expect(html).toContain('Image perceptual matching — Off');
+  expect(html).toContain('Video perceptual matching — Off');
+  for (const field of [
+    'image_phash_threshold',
+    'video_phash_threshold',
+    'video_frame_count',
+    'video_timeout_ms',
+  ]) {
+    const input = html.match(new RegExp(`<input id="${field}"[^>]*>`))?.[0];
+    expect(input).toContain('disabled=""');
+    expect(input).toContain(
+      `title="Enable ${field.startsWith('image') ? 'image' : 'video'} matching to configure"`
+    );
+  }
+  expect(matchingDraft(off)).toMatchObject({
+    match_images_enabled: false,
+    match_videos_enabled: false,
+  });
+  const invalidOff = {
+    ...matchingDraft(off),
+    video_frame_count: 'invalid',
+    image_phash_threshold: '',
+  };
+  expect(matchingErrors(invalidOff)).toEqual({});
+  expect(matchingPayload(invalidOff)).toEqual({
+    match_images_enabled: false,
+    match_videos_enabled: false,
+    min_file_size_mb: 0,
+    max_file_size_mb: 0,
+  });
+});
+it('gates newly enabled matching until a scan and replaces obsolete same-kind consequences', () => {
+  const enabled: SettingsConsequence[] = [
+    {
+      type: 'match_enabled',
+      kind: 'video',
+      message: 'Existing video files will be analyzed on the next scan (no content re-hashing).',
+    },
+    { type: 'rematch_required', reason: 'match_enabled', kind: 'video' },
+  ];
+  const off: SettingsConsequence = {
+    type: 'match_disabled',
+    kind: 'video',
+    message: 'Video matching disabled; re-match removes groups.',
+  };
+  const image: SettingsConsequence = {
+    type: 'match_disabled',
+    kind: 'image',
+    message: 'Image matching disabled.',
+  };
+  const html = renderConsequences(enabled);
+  expect(html).toContain(consequenceMessage(enabled[0]!));
+  expect(html).toContain('Re-match video files after the next scan completes.');
+  expect(html).not.toContain('Re-match now');
+  expect(renderConsequences([off])).toContain('Re-match now');
+  expect(mergeConsequences([off, image], enabled)).toEqual([image, ...enabled]);
+  expect(mergeConsequences(enabled, [off])).toEqual([off]);
 });
 it('renders millisecond-precision timeout seconds with a compatible input step', () => {
   const html = renderConsequences([]);

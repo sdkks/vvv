@@ -3,7 +3,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { MatchingSettings, SettingsConsequence } from '@vvv/shared';
 import { runMatching, SettingsValidationError, updateSettings } from './api';
 import {
+  consequenceMessage,
   consequenceMessages,
+  disabledMatchingKind,
+  matchingToggles,
+  mergeConsequences,
   isSizeField,
   matchingDraft,
   matchingErrors,
@@ -19,7 +23,9 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
   const [consequences, setConsequences] = useState<SettingsConsequence[]>([]);
   const saved = matchingDraft(matching);
   const values = draft ?? saved;
-  const dirty = matchingFields.some(({ key }) => values[key] !== saved[key]);
+  const dirty = [...matchingFields, ...matchingToggles].some(
+    ({ key }) => values[key] !== saved[key]
+  );
   const errors = matchingErrors(values);
   const save = useMutation({
     mutationFn: updateSettings,
@@ -27,17 +33,16 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
       cache.setQueryData(['settings'], result);
       setDraft(undefined);
       setAttempted(false);
-      setConsequences((current) => [
-        ...current.filter((c) => !result.consequences.some((next) => next.type === c.type)),
-        ...result.consequences,
-      ]);
+      setConsequences((current) => mergeConsequences(current, result.consequences));
       await cache.invalidateQueries({ queryKey: ['settings'] });
     },
   });
   const rematch = useMutation({
     mutationFn: runMatching,
     onSuccess: () => {
-      setConsequences((current) => current.filter((c) => c.type !== 'rematch_required'));
+      setConsequences((current) =>
+        current.filter((c) => c.type !== 'rematch_required' && c.type !== 'match_disabled')
+      );
     },
   });
   const fieldErrors = {
@@ -72,41 +77,76 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
           }
         }}
       >
-        {matchingFields.map(({ key, label, min, max }) => (
-          <div className="matching-field" key={key}>
-            <label htmlFor={key}>
-              {label}
-              {!isSizeField(key) && ` (${min}–${max})`}
+        {matchingToggles.map(({ key, kind, label }) => (
+          <div key={key}>
+            <label className="scan-option">
+              <input
+                type="checkbox"
+                checked={values[key]}
+                disabled={save.isPending || rematch.isPending}
+                aria-describedby={`${key}-help`}
+                onChange={(event) => {
+                  setDraft({ ...values, [key]: event.target.checked });
+                  save.reset();
+                }}
+              />
+              <span>
+                {label} — {values[key] ? 'Enabled' : 'Off'}
+              </span>
             </label>
-            <input
-              id={key}
-              type="number"
-              min={min}
-              max={max}
-              step={key === 'video_timeout_ms' ? '0.001' : '1'}
-              required={!isSizeField(key)}
-              placeholder={isSizeField(key) ? 'Disabled' : undefined}
-              value={values[key]}
-              disabled={save.isPending || rematch.isPending}
-              aria-invalid={!!fieldErrors[key]}
-              aria-describedby={
-                [isSizeField(key) ? 'size-policy-help' : '', fieldErrors[key] ? `${key}-error` : '']
-                  .filter(Boolean)
-                  .join(' ') || undefined
-              }
-              onChange={(event) => {
-                setDraft({ ...values, [key]: event.target.value });
-                save.reset();
-              }}
-            />
-            {isSizeField(key) && Number(values[key]) === 0 && <span>Disabled</span>}
-            {fieldErrors[key] && (
-              <p id={`${key}-error`} role="alert">
-                {fieldErrors[key]}
-              </p>
-            )}
+            <p id={`${key}-help`}>
+              Turning off skips future {kind} perceptual hashing. Existing {kind} groups remain
+              until re-match; re-match removes them. Turning on analyzes existing {kind} files on
+              the next scan without content re-hashing; re-match afterwards.
+            </p>
+            {fieldErrors[key] && <p role="alert">{fieldErrors[key]}</p>}
           </div>
         ))}
+        {matchingFields.map(({ key, label, min, max }) => {
+          const disabledKind = disabledMatchingKind(key, values);
+          const help = disabledKind ? `Enable ${disabledKind} matching to configure` : undefined;
+          return (
+            <div className="matching-field" key={key} title={help}>
+              <label htmlFor={key}>
+                {label}
+                {!isSizeField(key) && ` (${min}–${max})`}
+              </label>
+              <input
+                id={key}
+                type="number"
+                min={min}
+                max={max}
+                step={key === 'video_timeout_ms' ? '0.001' : '1'}
+                required={!isSizeField(key)}
+                placeholder={isSizeField(key) ? 'Disabled' : undefined}
+                value={values[key]}
+                disabled={!!disabledKind || save.isPending || rematch.isPending}
+                title={help}
+                aria-invalid={!!fieldErrors[key]}
+                aria-describedby={
+                  [
+                    disabledKind ? `${key}-disabled` : '',
+                    isSizeField(key) ? 'size-policy-help' : '',
+                    fieldErrors[key] ? `${key}-error` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ') || undefined
+                }
+                onChange={(event) => {
+                  setDraft({ ...values, [key]: event.target.value });
+                  save.reset();
+                }}
+              />
+              {help && <span id={`${key}-disabled`}>{help}</span>}
+              {isSizeField(key) && Number(values[key]) === 0 && <span>Disabled</span>}
+              {fieldErrors[key] && (
+                <p id={`${key}-error`} role="alert">
+                  {fieldErrors[key]}
+                </p>
+              )}
+            </div>
+          );
+        })}
         <p>{dirty ? 'Unsaved matching changes.' : 'Matching controls match saved values.'}</p>
         <div className="toolbar">
           <button disabled={!dirty || save.isPending || rematch.isPending}>
@@ -129,13 +169,16 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
       <div role="status" aria-live="polite">
         {save.isSuccess && <p>Matching settings saved.</p>}
         {consequences.map((c) => (
-          <p key={c.type}>{consequenceMessages[c.type]}</p>
+          <p key={`${c.type}-${'kind' in c ? c.kind : ''}`}>{consequenceMessage(c)}</p>
         ))}
         {rematch.isSuccess && <p>Re-match started. New results appear only when it completes.</p>}
       </div>
-      {consequences.some((c) => c.type === 'rematch_required') &&
+      {consequences.some((c) => c.type === 'rematch_required' || c.type === 'match_disabled') &&
         !consequences.some(
-          (c) => c.type === 'rescan_required' || c.type === 'next_scan_required'
+          (c) =>
+            c.type === 'rescan_required' ||
+            c.type === 'next_scan_required' ||
+            c.type === 'match_enabled'
         ) && (
           <button disabled={save.isPending || rematch.isPending} onClick={() => rematch.mutate()}>
             {rematch.isPending ? 'Starting re-match…' : 'Re-match now'}

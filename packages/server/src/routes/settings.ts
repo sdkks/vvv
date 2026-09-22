@@ -28,6 +28,8 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
           properties: {
             retention_days: { type: 'integer', minimum: 1, maximum: 3650 },
             auto_purge_enabled: { type: 'boolean' },
+            match_images_enabled: { type: 'boolean' },
+            match_videos_enabled: { type: 'boolean' },
             image_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
             video_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
             video_frame_count: { type: 'integer', minimum: 1, maximum: 64 },
@@ -61,16 +63,19 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
             fields: { max_file_size_mb: 'Maximum must be at least minimum when both are enabled.' },
           });
         const changed = (key: keyof MatchingControls) =>
-          request.body[key] !== undefined && request.body[key] !== matchingSetting(db, key);
+          request.body[key] !== undefined && Number(request.body[key]) !== matchingSetting(db, key);
         const thresholds = changed('image_phash_threshold') || changed('video_phash_threshold');
         const frames = changed('video_frame_count');
         const timeout = changed('video_timeout_ms');
         const sizes = changed('min_file_size_mb') || changed('max_file_size_mb');
+        const toggled = (['image', 'video'] as const).filter((kind) =>
+          changed(`match_${kind}s_enabled`)
+        );
         // Do not let an in-flight sampler restore old frames or a matcher mix settings.
         if (frames && db.prepare("SELECT 1 FROM scans WHERE status='running' LIMIT 1").get())
           return reply.code(409).send({ error: 'settings_scan_running' });
         if (
-          (frames || thresholds) &&
+          (frames || thresholds || toggled.length > 0) &&
           db.prepare("SELECT 1 FROM match_runs WHERE status='building' LIMIT 1").get()
         )
           return reply.code(409).send({ error: 'settings_match_running' });
@@ -89,6 +94,18 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
         if (frames) consequences.push({ type: 'rescan_required', reason: 'frame_count_change' });
         if (timeout) consequences.push({ type: 'future_sampling_only', reason: 'timeout_change' });
         if (sizes) consequences.push({ type: 'next_scan_required', reason: 'size_filter_change' });
+        for (const kind of toggled) {
+          const enabled = request.body[`match_${kind}s_enabled`];
+          consequences.push({
+            type: enabled ? 'match_enabled' : 'match_disabled',
+            kind,
+            message: enabled
+              ? `Existing ${kind} files will be analyzed on the next scan (no content re-hashing).`
+              : `Future scans skip ${kind} perceptual hashing; existing ${kind} groups remain until re-match; re-match removes them.`,
+          });
+          if (enabled)
+            consequences.push({ type: 'rematch_required', reason: 'match_enabled', kind });
+        }
         return { ...read(), consequences } satisfies UpdateSettingsResponse;
       })();
     }

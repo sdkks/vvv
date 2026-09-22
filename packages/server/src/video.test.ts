@@ -9,6 +9,7 @@ import {
   probeArgs,
   samplingArgs,
   videoHash,
+  videoMetadata,
   videoThumbnail,
 } from './video.js';
 
@@ -99,6 +100,18 @@ it('constructs commands with matching first-stream selection and one full-timeli
   );
   expect(spawn).toHaveBeenCalledTimes(2);
   expect(spawn).toHaveBeenNthCalledWith(2, 'ffmpeg', samplingArgs(path, 9, 2), {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+});
+it('collects metadata without ever spawning the frame sampler', async () => {
+  respond([metadata]);
+  expect(await videoMetadata('/media/clip.mp4', { timeout: 1000 })).toEqual({
+    width: 320,
+    height: 240,
+    duration: 2,
+    duration_ms: 2000,
+  });
+  expect(spawn).toHaveBeenCalledExactlyOnceWith('ffprobe', probeArgs('/media/clip.mp4'), {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 });
