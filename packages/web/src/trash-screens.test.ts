@@ -36,9 +36,17 @@ const policy: Policy = {
         enabled: true,
         threshold: 10,
       },
+      {
+        id: 'audio_chromaprint',
+        label: 'Audio matching (Chromaprint)',
+        scope: 'audio files and videos with sound',
+        enabled: true,
+        threshold: null,
+      },
     ],
     video_frame_count: 9,
     video_timeout_ms: 600000,
+    audio_timeout_ms: 600000,
     min_file_size_mb: 0,
     max_file_size_mb: 0,
   },
@@ -112,13 +120,13 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(section).toContain('Mean aligned-frame Hamming distance ≤ 10');
   expect(section).toContain('9 frames per video');
   expect(section).toContain('Sampling timeout: 10 minutes');
-  expect(section.match(/class="matching-badge">Default/g)).toHaveLength(5);
+  expect(section.match(/class="matching-badge">Default/g)).toHaveLength(6);
   expect(section).not.toContain('>Current<');
   expect(section).toContain('Exact matching is always on');
-  expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(3);
+  expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(4);
   expect(section).toContain('Size filter: disabled');
   expect(section).toContain(
-    'No AI or neural methods are used. Matching runs entirely locally: content hashes and perceptual dHash comparisons.'
+    'No AI or neural methods are used. Matching runs entirely locally: content hashes, perceptual dHash comparisons, and Chromaprint audio fingerprints.'
   );
   expect(section).toContain('<details><summary>How matching works</summary>');
   expect(section).toContain('Lower thresholds are stricter');
@@ -153,7 +161,7 @@ it('shows Enabled and Off badges for saved switches while exact stays always on'
     },
   });
   const section = html.slice(html.indexOf('<section'), html.indexOf('</section>'));
-  expect(section.match(/class="matching-badge">Off/g)).toHaveLength(2);
+  expect(section.match(/class="matching-badge">Off/g)).toHaveLength(3);
   expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(1);
   expect(section).toContain('all files · Always on');
 });
@@ -163,12 +171,15 @@ it('shows Current badges independently for customized thresholds and sampling va
     matching: {
       file_hash_algorithm: 'sha256',
       methods: policy.matching.methods.map((method) =>
-        method.id === 'exact'
-          ? method
-          : { ...method, threshold: method.id === 'image_dhash' ? 0 : 12 }
+        method.id === 'image_dhash'
+          ? { ...method, threshold: 0 }
+          : method.id === 'video_dhash'
+            ? { ...method, threshold: 12 }
+            : method
       ),
       video_frame_count: 1,
       video_timeout_ms: 90000,
+      audio_timeout_ms: 600000,
       min_file_size_mb: 1,
       max_file_size_mb: 100,
     },
@@ -179,7 +190,7 @@ it('shows Current badges independently for customized thresholds and sampling va
   expect(html).toContain('Sampling timeout: 90 seconds');
   expect(html).toContain('Size filter: 1–100 MiB');
   expect(html.match(/class="matching-badge">Current/g)).toHaveLength(4);
-  expect(html.match(/class="matching-badge">Default/g)).toHaveLength(1);
+  expect(html.match(/class="matching-badge">Default/g)).toHaveLength(2);
 });
 it.each([
   [60000, '1 minute'],
