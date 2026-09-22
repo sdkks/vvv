@@ -24,6 +24,7 @@ vi.mock('react', async (importOriginal) => {
 });
 
 const draft: MatchingDraft = {
+  file_hash_algorithm: 'sha256',
   match_images_enabled: true,
   match_videos_enabled: true,
   image_phash_threshold: '6',
@@ -77,6 +78,7 @@ it('round-trips a saved timeout that is not a whole number of seconds', () => {
 });
 it('uses saved effective values and converts seconds to milliseconds only in the payload', () => {
   const result = matchingDraft({
+    file_hash_algorithm: 'sha256',
     methods: [
       { id: 'image_dhash', label: '', scope: '', enabled: true, threshold: 0 },
       { id: 'video_dhash', label: '', scope: '', enabled: true, threshold: 64 },
@@ -87,6 +89,7 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     max_file_size_mb: 0,
   });
   expect(result).toEqual({
+    file_hash_algorithm: 'sha256',
     match_images_enabled: true,
     match_videos_enabled: true,
     image_phash_threshold: '0',
@@ -97,6 +100,7 @@ it('uses saved effective values and converts seconds to milliseconds only in the
     max_file_size_mb: '',
   });
   expect(matchingPayload(result)).toEqual({
+    file_hash_algorithm: 'sha256',
     match_images_enabled: true,
     match_videos_enabled: true,
     image_phash_threshold: 0,
@@ -177,6 +181,7 @@ it('uses exact consequence messaging', () => {
 });
 
 const matching: MatchingSettings = {
+  file_hash_algorithm: 'sha256',
   methods: [
     { id: 'image_dhash', label: '', scope: '', enabled: true, threshold: 6 },
     { id: 'video_dhash', label: '', scope: '', enabled: true, threshold: 10 },
@@ -249,6 +254,7 @@ it('renders off controls disabled with explanations and never provides an exact 
   };
   expect(matchingErrors(invalidOff)).toEqual({});
   expect(matchingPayload(invalidOff)).toEqual({
+    file_hash_algorithm: 'sha256',
     match_images_enabled: false,
     match_videos_enabled: false,
     min_file_size_mb: 0,
@@ -281,6 +287,43 @@ it('gates newly enabled matching until a scan and replaces obsolete same-kind co
   expect(renderConsequences([off])).toContain('Re-match now');
   expect(mergeConsequences([off, image], enabled)).toEqual([image, ...enabled]);
   expect(mergeConsequences(enabled, [off])).toEqual([off]);
+});
+it.each(['', 'SHA-256', 'md5', 'blake2b', ' sha256 '])(
+  'rejects invalid hash algorithm %j',
+  (value) => {
+    const invalid = { ...draft, file_hash_algorithm: value };
+    expect(matchingErrors(invalid)).toEqual({
+      file_hash_algorithm: 'Choose SHA-256 or BLAKE2B-512.',
+    });
+    expect(() => matchingPayload(invalid)).toThrow('Choose SHA-256 or BLAKE2B-512.');
+  }
+);
+it.each(['sha256', 'blake2b512'] as const)(
+  'round-trips and renders hash algorithm %s',
+  (algorithm) => {
+    const settings = { ...matching, file_hash_algorithm: algorithm };
+    const values = matchingDraft(settings);
+    expect(matchingErrors(values)).toEqual({});
+    expect(matchingPayload(values).file_hash_algorithm).toBe(algorithm);
+    const html = renderConsequences([], settings);
+    expect(html).toContain('for="file_hash_algorithm">Content hash algorithm');
+    expect(html).toContain(`<option value="${algorithm}" selected="">`);
+    expect(html).toContain('strongest, hardware-accelerated on many CPUs');
+    expect(html).toContain('BLAKE2B-512 — fast software hash');
+    expect(html).toContain('I/O-bound');
+  }
+);
+it('keeps re-hash consequences across saves and gates premature re-match', () => {
+  const rehash: SettingsConsequence = {
+    type: 'rehash_required',
+    message: 'All files will be re-hashed with the new algorithm on the next scan.',
+  };
+  const rematch: SettingsConsequence = { type: 'rematch_required', reason: 'threshold_change' };
+  const merged = mergeConsequences([rehash], [rematch]);
+  expect(mergeConsequences(merged, [])).toEqual([rehash, rematch]);
+  const html = renderConsequences(merged);
+  expect(html).toContain(rehash.message);
+  expect(html).not.toContain('Re-match now');
 });
 it('renders millisecond-precision timeout seconds with a compatible input step', () => {
   const html = renderConsequences([]);

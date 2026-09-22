@@ -1,6 +1,7 @@
 # Video matching and calibration
 
-Videos are SHA-256 hashed, then probed with ffprobe and sampled with one ffmpeg
+Videos are content-hashed (SHA-256 by default, or BLAKE2B-512 via Advanced matching
+controls), then probed with ffprobe and sampled with one ffmpeg
 process. ffmpeg must decode the timeline even though only nine frames are emitted.
 Images and videos use the same 64-bit, 9×8 grayscale dHash construction. Four
 shared work slots bound hashing, decoding, and thumbnail generation; ffmpeg may
@@ -10,7 +11,9 @@ Duration comes from the container, falling back to the first video stream. Missi
 or nonpositive duration is a `no_duration` per-file error. A failed decoder, partial
 frame, or frame count other than nine is `incomplete_frames`; hung children become
 `timeout`. Errors do not abort the scan. Cancellation terminates children and
-retains successful SHA checkpoints for the next scan.
+retains successful content-hash checkpoints for the next scan. Changing the content-hash
+algorithm invalidates those checkpoints, but preserves unchanged perceptual hashes;
+re-hashing alone does not repeat ffprobe/ffmpeg sampling.
 
 Video candidate probes require matching frame indices and band indices. Verification
 uses the mean of all nine aligned Hamming distances, with a default threshold of 10. Similarity in group details is mean distance to the smallest-id reference,

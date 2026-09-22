@@ -23,9 +23,9 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
   const [consequences, setConsequences] = useState<SettingsConsequence[]>([]);
   const saved = matchingDraft(matching);
   const values = draft ?? saved;
-  const dirty = [...matchingFields, ...matchingToggles].some(
-    ({ key }) => values[key] !== saved[key]
-  );
+  const dirty =
+    values.file_hash_algorithm !== saved.file_hash_algorithm ||
+    [...matchingFields, ...matchingToggles].some(({ key }) => values[key] !== saved[key]);
   const errors = matchingErrors(values);
   const save = useMutation({
     mutationFn: updateSettings,
@@ -57,9 +57,9 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
         retrieval is approximate, especially above distance 7. Saving thresholds does not re-match.
       </p>
       <p>
-        Changing frame count clears video perceptual hashes, not SHA-256 checkpoints. Videos will be
-        re-sampled on the next scan; re-match afterwards. Timeout changes affect only future or
-        retried sampling, not completed work.
+        Changing frame count clears video perceptual hashes, not content-hash checkpoints. Videos
+        will be re-sampled on the next scan; re-match afterwards. Timeout changes affect only future
+        or retried sampling, not completed work.
       </p>
       <p id="size-policy-help">
         Size limits are inclusive. Leave a size input empty to disable that bound (saved as 0).
@@ -102,6 +102,33 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
             {fieldErrors[key] && <p role="alert">{fieldErrors[key]}</p>}
           </div>
         ))}
+        <div className="matching-field">
+          <label htmlFor="file_hash_algorithm">Content hash algorithm</label>
+          <select
+            id="file_hash_algorithm"
+            value={values.file_hash_algorithm}
+            disabled={save.isPending || rematch.isPending}
+            aria-invalid={!!fieldErrors.file_hash_algorithm}
+            aria-describedby={`hash-algorithm-help${fieldErrors.file_hash_algorithm ? ' hash-algorithm-error' : ''}`}
+            onChange={(event) => {
+              setDraft({ ...values, file_hash_algorithm: event.target.value });
+              save.reset();
+            }}
+          >
+            <option value="sha256">SHA-256 — strongest, hardware-accelerated on many CPUs</option>
+            <option value="blake2b512">BLAKE2B-512 — fast software hash</option>
+          </select>
+          <p id="hash-algorithm-help">
+            Changing the algorithm re-hashes all files on the next scan, without re-sampling
+            unchanged perceptual hashes. Scan before re-matching. Large media hashing is I/O-bound;
+            the speed benefit is biggest with many small files.
+          </p>
+          {fieldErrors.file_hash_algorithm && (
+            <p id="hash-algorithm-error" role="alert">
+              {fieldErrors.file_hash_algorithm}
+            </p>
+          )}
+        </div>
         {matchingFields.map(({ key, label, min, max }) => {
           const disabledKind = disabledMatchingKind(key, values);
           const help = disabledKind ? `Enable ${disabledKind} matching to configure` : undefined;
@@ -177,6 +204,7 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
         !consequences.some(
           (c) =>
             c.type === 'rescan_required' ||
+            c.type === 'rehash_required' ||
             c.type === 'next_scan_required' ||
             c.type === 'match_enabled'
         ) && (

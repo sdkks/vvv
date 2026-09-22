@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { fileSizeSettings, matchingSetting, numericSetting } from './matching-settings.js';
+import {
+  fileHashAlgorithm,
+  fileSizeSettings,
+  matchingSetting,
+  matchingSettings,
+  numericSetting,
+} from './matching-settings.js';
 import { mediaSetting } from './video.js';
 
 let db: Database.Database;
@@ -29,6 +35,29 @@ it.each([
   for (const value of [min - 1, max + 1, 1.5, 'NaN', 'Infinity', 'invalid']) {
     put.run(key, String(value));
     expect(() => matchingSetting(db, key)).toThrow(`Invalid ${key}`);
+  }
+});
+it('defaults content hashing to SHA-256, reports either algorithm and rejects corrupt stored values', () => {
+  expect(fileHashAlgorithm(db)).toBe('sha256');
+  expect(db.prepare('SELECT * FROM settings').all()).toEqual([]);
+  const put = db.prepare("INSERT OR REPLACE INTO settings VALUES ('file_hash_algorithm',?)");
+  for (const [algorithm, label] of [
+    ['sha256', 'SHA-256'],
+    ['blake2b512', 'BLAKE2B-512'],
+  ]) {
+    put.run(algorithm);
+    expect(matchingSettings(db)).toMatchObject({
+      file_hash_algorithm: algorithm,
+      methods: [
+        expect.objectContaining({ id: 'exact', algorithm, label: `Exact duplicates — ${label}` }),
+        expect.anything(),
+        expect.anything(),
+      ],
+    });
+  }
+  for (const value of ['', 'md5', 'SHA256', 'blake2b', ' sha256 ']) {
+    put.run(value);
+    expect(() => fileHashAlgorithm(db)).toThrow('Invalid file_hash_algorithm');
   }
 });
 it('reads absent size limits as disabled and rejects invalid persisted ranges', () => {

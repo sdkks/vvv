@@ -17,10 +17,12 @@ let app: Awaited<ReturnType<typeof createServer>>;
 let db: ReturnType<typeof openDatabase>['db'];
 let cookie: string;
 const matching: Settings['matching'] = {
+  file_hash_algorithm: 'sha256',
   methods: [
     {
       id: 'exact',
-      label: 'Exact duplicates (SHA-256)',
+      label: 'Exact duplicates — SHA-256',
+      algorithm: 'sha256',
       scope: 'all files',
       enabled: true,
       threshold: null,
@@ -107,6 +109,7 @@ it('reports independently seeded effective values, including a zero threshold', 
   const response = await get();
   expect(response.statusCode).toBe(200);
   expect(response.json<Settings>().matching).toEqual({
+    file_hash_algorithm: 'sha256',
     methods: matching.methods.map((method) => ({
       ...method,
       threshold: method.id === 'exact' ? null : method.id === 'image_dhash' ? 0 : 12,

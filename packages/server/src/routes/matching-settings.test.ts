@@ -166,6 +166,120 @@ it.each(['image', 'video'] as const)(
     expect((await get('/api/groups?kind=video')).json<GroupsResponse>().items).toHaveLength(1);
   }
 );
+it('validates the hash enum strictly, authorizes access, and treats unchanged defaults as a no-op', async () => {
+  file('image');
+  const before = catalog();
+  expect((await get()).json<Settings>().matching.file_hash_algorithm).toBe('sha256');
+  for (const value of ['', 'SHA-256', 'md5', 'blake2b', ' sha256 ', 0, true, null, [], {}]) {
+    const response = await patch({ file_hash_algorithm: value, retention_days: 12 });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: 'invalid_settings',
+      fields: { file_hash_algorithm: expect.any(String) },
+    });
+    expect((await get()).json<Settings>().retention_days).toBe(30);
+    expect(catalog()).toEqual(before);
+  }
+  expect(
+    (
+      await app.inject({
+        method: 'PATCH',
+        url: '/api/settings',
+        payload: { file_hash_algorithm: 'blake2b512' },
+      })
+    ).statusCode
+  ).toBe(401);
+  expect((await app.inject('/api/settings')).statusCode).toBe(401);
+  expect(
+    (await patch({ file_hash_algorithm: 'sha256' })).json<UpdateSettingsResponse>().consequences
+  ).toEqual([]);
+  expect(catalog()).toEqual(before);
+});
+it('invalidates all content hashes atomically, preserves unavailable statuses and perceptual work across restart', async () => {
+  const statuses = ['done', 'hashed', 'error', 'missing', 'quarantined', 'excluded', 'pending'];
+  for (const status of statuses) file('image', status);
+  const hashes = db.prepare('SELECT * FROM phashes').all();
+  const bands = db.prepare('SELECT * FROM phash_bands').all();
+  for (const algorithm of ['blake2b512', 'sha256']) {
+    statuses.forEach((status, i) =>
+      db
+        .prepare('UPDATE files SET status=?,sha256=? WHERE id=?')
+        .run(status, 'old-checkpoint', i + 1)
+    );
+    const response = await patch({ file_hash_algorithm: algorithm, retention_days: 12 });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<UpdateSettingsResponse>()).toMatchObject({
+      retention_days: 12,
+      matching: {
+        file_hash_algorithm: algorithm,
+        methods: [
+          expect.objectContaining({ id: 'exact', algorithm }),
+          expect.anything(),
+          expect.anything(),
+        ],
+      },
+      consequences: [
+        {
+          type: 'rehash_required',
+          message: 'All files will be re-hashed with the new algorithm on the next scan.',
+        },
+      ],
+    });
+    await app.close();
+    db.close();
+    app = await createServer({ ...config, dataDir: root }, false);
+    db = openDatabase(root).db;
+    expect((await get()).json<Settings>().matching.file_hash_algorithm).toBe(algorithm);
+    expect(db.prepare('SELECT status,sha256 FROM files ORDER BY id').all()).toEqual(
+      statuses.map((status) => ({
+        status: status === 'done' || status === 'hashed' ? 'pending' : status,
+        sha256: null,
+      }))
+    );
+    expect(db.prepare('SELECT * FROM phashes').all()).toEqual(hashes);
+    expect(db.prepare('SELECT * FROM phash_bands').all()).toEqual(bands);
+    expect(
+      (await patch({ file_hash_algorithm: algorithm })).json<UpdateSettingsResponse>().consequences
+    ).toEqual([]);
+  }
+});
+it('rolls back the algorithm, hashes and other settings when re-queue invalidation fails', async () => {
+  file('image');
+  file('video', 'quarantined');
+  const before = catalog();
+  db.exec(
+    `CREATE TRIGGER fail_requeue BEFORE UPDATE OF status ON files BEGIN SELECT RAISE(ABORT,'fixture'); END`
+  );
+  expect((await patch({ file_hash_algorithm: 'blake2b512', retention_days: 2 })).statusCode).toBe(
+    500
+  );
+  expect(catalog()).toEqual(before);
+  expect((await get()).json<Settings>()).toMatchObject({
+    retention_days: 30,
+    matching: { file_hash_algorithm: 'sha256', video_frame_count: 9 },
+  });
+});
+it('refuses algorithm changes during scans or matching before mutation, but accepts no-ops', async () => {
+  file('image');
+  const before = catalog();
+  for (const table of ['scans', 'match_runs']) {
+    db.prepare(`INSERT INTO ${table}(status) VALUES (?)`).run(
+      table === 'scans' ? 'running' : 'building'
+    );
+    const response = await patch({ file_hash_algorithm: 'blake2b512', retention_days: 1 });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: table === 'scans' ? 'settings_scan_running' : 'settings_match_running',
+    });
+    expect((await patch({ file_hash_algorithm: 'sha256' })).statusCode).toBe(200);
+    expect(catalog()).toEqual(before);
+    expect((await get()).json<Settings>()).toMatchObject({
+      retention_days: 30,
+      matching: { file_hash_algorithm: 'sha256' },
+    });
+    db.prepare(`DELETE FROM ${table}`).run();
+  }
+});
 it('validates merged size ranges atomically and persists explicit disabling with consequences', async () => {
   const video = file('video', 'excluded');
   const before = catalog();

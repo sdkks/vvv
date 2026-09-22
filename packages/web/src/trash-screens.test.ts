@@ -12,10 +12,12 @@ const policy: Policy = {
   retention_days: 30,
   auto_purge_enabled: false,
   matching: {
+    file_hash_algorithm: 'sha256',
     methods: [
       {
         id: 'exact',
-        label: 'Exact duplicates (SHA-256)',
+        label: 'Exact duplicates — SHA-256',
+        algorithm: 'sha256',
         scope: 'all files',
         enabled: true,
         threshold: null,
@@ -116,7 +118,7 @@ it('renders read-only matching methods above retention with defaults and honest 
   expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(3);
   expect(section).toContain('Size filter: disabled');
   expect(section).toContain(
-    'No AI or neural methods are used. Matching runs entirely locally: SHA-256 content hashes and perceptual dHash comparisons.'
+    'No AI or neural methods are used. Matching runs entirely locally: content hashes and perceptual dHash comparisons.'
   );
   expect(section).toContain('<details><summary>How matching works</summary>');
   expect(section).toContain('Lower thresholds are stricter');
@@ -138,7 +140,7 @@ it('keeps matching controls in a separate disclosure with labels, units, discard
   expect(html).toContain('Discard changes');
   expect(html).toContain('Matching controls match saved values');
   expect(html).toContain('role="status" aria-live="polite"');
-  expect(html).toContain('not SHA-256 checkpoints');
+  expect(html).toContain('not content-hash checkpoints');
 });
 it('shows Enabled and Off badges for saved switches while exact stays always on', () => {
   const html = render(Settings, [], {
@@ -159,6 +161,7 @@ it('shows Current badges independently for customized thresholds and sampling va
   const html = render(Settings, [], {
     ...policy,
     matching: {
+      file_hash_algorithm: 'sha256',
       methods: policy.matching.methods.map((method) =>
         method.id === 'exact'
           ? method

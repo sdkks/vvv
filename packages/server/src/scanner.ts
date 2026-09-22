@@ -3,10 +3,15 @@ import { join } from 'node:path';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
-import type { FileSizePolicy, ScanProgress } from '@vvv/shared';
+import type { FileHashAlgorithm, FileSizePolicy, ScanProgress } from '@vvv/shared';
 import { imageHash, imageMetadata, processFile, storeHashes } from './hashing.js';
 import { MediaWork, videoHash, videoMetadata } from './video.js';
-import { fileSizeSettings, matchingEnabled, matchingSetting } from './matching-settings.js';
+import {
+  fileHashAlgorithm,
+  fileSizeSettings,
+  matchingEnabled,
+  matchingSetting,
+} from './matching-settings.js';
 import { refreshFileGroups } from './matcher.js';
 import {
   crossesBoundary,
@@ -38,6 +43,7 @@ export class Scanner {
   private currentFile?: string;
   private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
   private perceptual = { image: true, video: true };
+  private algorithm: FileHashAlgorithm = 'sha256';
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
@@ -66,6 +72,9 @@ export class Scanner {
   }
   start(): number | null {
     if (this.task) return null;
+    // Algorithm changes clear all legacy sha256 checkpoints and are refused during scans.
+    // Snapshot the algorithm so every surviving content hash uses the same algorithm.
+    this.algorithm = fileHashAlgorithm(this.db);
     // Size limits and method switches apply to the next scan, never partway through this one.
     this.sizes = fileSizeSettings(this.db);
     this.perceptual = {
@@ -126,7 +135,8 @@ export class Scanner {
     this.db.transaction(() => {
       const previous = this.db
         .prepare(
-          `SELECT size,mtime_ns,CASE WHEN status='done' AND ?
+          `SELECT size,mtime_ns,CASE WHEN status IN ('done','hashed') AND sha256 IS NULL
+          THEN 'pending' WHEN status='done' AND ?
           AND NOT EXISTS (SELECT 1 FROM phashes WHERE file_id=files.id AND frame_idx=0)
           THEN 'hashed' ELSE status END AS status FROM files WHERE scan_dir_id=? AND rel_path=?`
         )
@@ -158,6 +168,9 @@ export class Scanner {
         last_seen_scan_id=excluded.last_seen_scan_id,updated_at=datetime('now') RETURNING id`
         )
         .get(dir.id, path, kind, size, mtime, status, scan, error ?? exclusion) as { id: number };
+      // Invalidate stale perceptual work with changed metadata, including while excluded.
+      // Otherwise a resumed scan could mistake old frames for a hash-only checkpoint.
+      if (previous && !unchanged) storeHashes(this.db, recorded.id, []);
       if (exclusion) refreshFileGroups(this.db, recorded.id);
       this.db
         .prepare(
@@ -265,7 +278,10 @@ export class Scanner {
       while (!this.cancelled) {
         const batch = this.db
           .prepare(
-            `SELECT f.id,d.path,f.rel_path,f.kind,f.status,f.sha256 FROM files f JOIN scan_dirs d ON d.id=f.scan_dir_id
+            `SELECT f.id,d.path,f.rel_path,f.kind,f.status,f.sha256,
+          (f.sha256 IS NULL OR f.status='hashed') AND EXISTS (
+            SELECT 1 FROM phashes WHERE file_id=f.id AND frame_idx=0) AS reuse_phashes
+          FROM files f JOIN scan_dirs d ON d.id=f.scan_dir_id
           WHERE f.status IN ('pending','hashed') AND f.last_seen_scan_id=? LIMIT 4`
           )
           .all(id) as {
@@ -275,6 +291,7 @@ export class Scanner {
           kind: string;
           status: string;
           sha256: string | null;
+          reuse_phashes: number;
         }[];
         if (!batch.length) break;
         await Promise.all(
@@ -289,18 +306,20 @@ export class Scanner {
                   | { hashes: Buffer[]; width?: number; height?: number; duration_ms?: number }
                   | undefined;
                 try {
-                  if (file.status === 'pending') {
-                    const sha = file.sha256 ?? (await processFile(path));
+                  if (file.status === 'pending' || file.sha256 === null) {
+                    const sha = file.sha256 ?? (await processFile(path, this.algorithm));
                     this.db
                       .prepare("UPDATE files SET sha256=?,status='hashed' WHERE id=?")
                       .run(sha, file.id);
                   }
-                  if (file.kind === 'image') {
+                  // Only reuse a hash-only/resumable checkpoint; traversal already removed
+                  // stale phashes on size/mtime changes. Backfill still runs when absent.
+                  if (!file.reuse_phashes && file.kind === 'image') {
                     if (this.perceptual.image) {
                       const image = await imageHash(path);
                       result = { ...image, hashes: [image.hash] };
                     } else result = { ...(await imageMetadata(path)), hashes: [] };
-                  } else {
+                  } else if (!file.reuse_phashes) {
                     const options = {
                       timeout: matchingSetting(this.db, 'video_timeout_ms'),
                       signal: this.abort.signal,

@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import type Database from 'better-sqlite3';
+import type { FileHashAlgorithm } from '@vvv/shared';
 import sharp from 'sharp';
 
-export async function processFile(path: string): Promise<string> {
-  const hash = createHash('sha256');
+export async function processFile(
+  path: string,
+  algorithm: FileHashAlgorithm = 'sha256'
+): Promise<string> {
+  const hash = createHash(algorithm);
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 }

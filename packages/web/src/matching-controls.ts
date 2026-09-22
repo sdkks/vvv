@@ -19,7 +19,7 @@ export const matchingToggles = [
   { key: 'match_videos_enabled', kind: 'video', label: 'Video perceptual matching' },
 ] as const;
 type NumericKey = (typeof matchingFields)[number]['key'];
-export type MatchingDraft = Record<NumericKey, string> &
+export type MatchingDraft = Record<NumericKey | 'file_hash_algorithm', string> &
   Pick<MatchingControls, (typeof matchingToggles)[number]['key']>;
 export function disabledMatchingKind(key: NumericKey, draft: MatchingDraft) {
   if (key === 'image_phash_threshold' && !draft.match_images_enabled) return 'image';
@@ -39,6 +39,7 @@ export function sizePolicyLabel({ min_file_size_mb: min, max_file_size_mb: max }
 }
 export function matchingDraft(settings: MatchingSettings): MatchingDraft {
   return {
+    file_hash_algorithm: settings.file_hash_algorithm,
     match_images_enabled: settings.methods.some((m) => m.id === 'image_dhash' && m.enabled),
     match_videos_enabled: settings.methods.some((m) => m.id === 'video_dhash' && m.enabled),
     image_phash_threshold: String(settings.methods.find((m) => m.id === 'image_dhash')?.threshold),
@@ -72,6 +73,8 @@ export function matchingErrors(draft: MatchingDraft): Partial<Record<keyof Match
         : [[key, `Enter a whole number from ${min} to ${max}.`]];
     })
   );
+  if (draft.file_hash_algorithm !== 'sha256' && draft.file_hash_algorithm !== 'blake2b512')
+    errors.file_hash_algorithm = 'Choose SHA-256 or BLAKE2B-512.';
   const min = Number(draft.min_file_size_mb),
     max = Number(draft.max_file_size_mb);
   if (!errors.min_file_size_mb && !errors.max_file_size_mb && min > 0 && max > 0 && min > max)
@@ -79,7 +82,10 @@ export function matchingErrors(draft: MatchingDraft): Partial<Record<keyof Match
   return errors;
 }
 export function matchingPayload(draft: MatchingDraft): UpdateSettingsRequest {
+  if (draft.file_hash_algorithm !== 'sha256' && draft.file_hash_algorithm !== 'blake2b512')
+    throw new Error('Choose SHA-256 or BLAKE2B-512.');
   return {
+    file_hash_algorithm: draft.file_hash_algorithm,
     match_images_enabled: draft.match_images_enabled,
     match_videos_enabled: draft.match_videos_enabled,
     ...(draft.match_images_enabled

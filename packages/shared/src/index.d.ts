@@ -129,11 +129,12 @@ export interface ExportGroup {
 export interface ExportResponse {
   groups: ExportGroup[];
 }
+export type FileHashAlgorithm = 'sha256' | 'blake2b512';
 export type MatchingMethod = {
   label: string;
   scope: string;
 } & (
-  | { id: 'exact'; enabled: true; threshold: null }
+  | { id: 'exact'; enabled: true; threshold: null; algorithm: FileHashAlgorithm }
   | { id: 'image_dhash' | 'video_dhash'; enabled: boolean; threshold: number }
 );
 export interface FileSizePolicy {
@@ -142,6 +143,7 @@ export interface FileSizePolicy {
   max_file_size_mb: number;
 }
 export interface MatchingSettings extends FileSizePolicy {
+  file_hash_algorithm: FileHashAlgorithm;
   methods: MatchingMethod[];
   video_frame_count: number;
   video_timeout_ms: number;
@@ -154,6 +156,7 @@ export interface Settings extends RetentionSettings {
   matching: MatchingSettings;
 }
 export interface MatchingControls extends FileSizePolicy {
+  file_hash_algorithm: FileHashAlgorithm;
   match_images_enabled: boolean;
   match_videos_enabled: boolean;
   image_phash_threshold: number;
@@ -167,6 +170,7 @@ export type SettingsConsequence =
   | { type: 'rematch_required'; reason: 'match_enabled'; kind: 'image' | 'video' }
   | { type: 'match_enabled' | 'match_disabled'; kind: 'image' | 'video'; message: string }
   | { type: 'rescan_required'; reason: 'frame_count_change' }
+  | { type: 'rehash_required'; message: string }
   | { type: 'future_sampling_only'; reason: 'timeout_change' }
   | { type: 'next_scan_required'; reason: 'size_filter_change' };
 export interface UpdateSettingsResponse extends Settings {

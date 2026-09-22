@@ -584,7 +584,7 @@ it('retries decoding unchanged invalid images without repeating successful SHA w
     .jpeg()
     .toFile(path);
   await scan();
-  expect(hash).toHaveBeenCalledExactlyOnceWith(path);
+  expect(hash).toHaveBeenCalledExactlyOnceWith(path, 'sha256');
   expect(scanner.current()).toMatchObject({ processed: 1, errors: 0 });
   expect(files()).toEqual([expect.objectContaining({ status: 'done', error: null })]);
   expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 4 });
@@ -881,6 +881,208 @@ it('re-samples after a frame-count PATCH without repeating SHA and uses the save
   }
 });
 
+async function setAlgorithm(algorithm: 'sha256' | 'blake2b512', extra: object = {}) {
+  const route = Fastify({ ajv: { customOptions: { coerceTypes: false } } });
+  settingsRoutes(route, db);
+  try {
+    const response = await route.inject({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: { file_hash_algorithm: algorithm, ...extra },
+    });
+    expect(response.statusCode).toBe(200);
+  } finally {
+    await route.close();
+  }
+}
+it.each(['image', 'video'] as const)(
+  're-hashes %s files after switching and restoring without re-sampling, then exact-matches them',
+  async (kind) => {
+    seed();
+    const extension = kind === 'image' ? 'jpg' : 'mp4';
+    for (const name of ['a', 'b', 'trash', 'purge']) await put(`${name}.${extension}`, 'duplicate');
+    await scan();
+    const rows = db.prepare('SELECT id,rel_path FROM files ORDER BY rel_path').all() as {
+      id: number;
+      rel_path: string;
+    }[];
+    const quarantine = new Quarantine(db, log);
+    const moved = await quarantine.change('quarantine', rows[3]!.id);
+    const purged = await quarantine.change('quarantine', rows[2]!.id);
+    const perceptual = kind === 'image' ? hashing.imageHash : video.videoHash;
+    const savedHashes = db.prepare('SELECT * FROM phashes WHERE file_id!=?').all(rows[2]!.id);
+    const savedBands = db.prepare('SELECT * FROM phash_bands WHERE file_id!=?').all(rows[2]!.id);
+    await setAlgorithm('blake2b512');
+    expect(db.prepare('SELECT sha256 FROM files WHERE id=?').get(rows[3]!.id)).toEqual({
+      sha256: null,
+    });
+    await quarantine.change('purge', purged.trash_id);
+    hash.mockClear();
+    vi.mocked(perceptual).mockClear();
+    await scan();
+    expect(hash).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(perceptual)).not.toHaveBeenCalled();
+    const digest = createHash('blake2b512').update('duplicate').digest('hex');
+    expect(db.prepare("SELECT sha256 FROM files WHERE status='done'").all()).toEqual([
+      { sha256: digest },
+      { sha256: digest },
+    ]);
+    await quarantine.change('restore', moved.trash_id);
+    expect(db.prepare('SELECT status,sha256 FROM files WHERE id=?').get(rows[3]!.id)).toEqual({
+      status: 'done',
+      sha256: null,
+    });
+    const matcher = new Matcher(db, log);
+    const exactMembers = () =>
+      db
+        .prepare(
+          "SELECT m.file_id FROM dup_group_members m JOIN dup_groups g ON g.id=m.group_id WHERE g.kind='exact' ORDER BY m.file_id"
+        )
+        .all();
+    matcher.start();
+    await matcher.close();
+    expect(exactMembers()).not.toContainEqual({ file_id: rows[3]!.id });
+    hash.mockClear();
+    await scan();
+    expect(hash).toHaveBeenCalledExactlyOnceWith(join(media, rows[3]!.rel_path), 'blake2b512');
+    expect(perceptual).not.toHaveBeenCalled();
+    matcher.start();
+    await matcher.close();
+    expect(exactMembers()).toHaveLength(3);
+    expect(exactMembers()).toContainEqual({ file_id: rows[3]!.id });
+    await setAlgorithm('sha256');
+    hash.mockClear();
+    await scan();
+    expect(hash).toHaveBeenCalledTimes(3);
+    expect(perceptual).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT sha256 FROM files').all()).toEqual(
+      Array.from({ length: 3 }, () => ({
+        sha256: createHash('sha256').update('duplicate').digest('hex'),
+      }))
+    );
+    expect(db.prepare('SELECT * FROM phashes').all()).toEqual(savedHashes);
+    expect(db.prepare('SELECT * FROM phash_bands').all()).toEqual(savedBands);
+  }
+);
+it('snapshots the content hash algorithm before traversal starts', async () => {
+  seed();
+  await put('image.jpg');
+  await setAlgorithm('blake2b512');
+  scanner.start();
+  // The public API refuses this; verify the worker snapshot independently.
+  db.exec("UPDATE settings SET value='sha256' WHERE key='file_hash_algorithm'");
+  await finished();
+  expect(hash).toHaveBeenCalledExactlyOnceWith(join(media, 'image.jpg'), 'blake2b512');
+});
+it('replaces changed-content perceptual hashes while reusing only unchanged re-hash checkpoints', async () => {
+  seed();
+  await put('image.jpg', 'before');
+  await put('clip.mp4', 'before');
+  await scan();
+  await setAlgorithm('blake2b512');
+  await put('image.jpg', 'new image content');
+  await put('clip.mp4', 'new video content');
+  vi.mocked(hashing.imageHash).mockResolvedValue({
+    hash: Buffer.alloc(8, 1),
+    width: 18,
+    height: 16,
+  });
+  vi.mocked(video.videoHash).mockResolvedValue({
+    hashes: Array.from({ length: 9 }, () => Buffer.alloc(8, 2)),
+    width: 640,
+    height: 480,
+    duration: 3,
+    duration_ms: 3000,
+  });
+  hash.mockClear();
+  await scan();
+  expect(hash).toHaveBeenCalledTimes(2);
+  expect(hashing.imageHash).toHaveBeenCalledTimes(2);
+  expect(video.videoHash).toHaveBeenCalledTimes(2);
+  expect(
+    db
+      .prepare("SELECT hash FROM phashes p JOIN files f ON f.id=p.file_id WHERE f.kind='image'")
+      .all()
+  ).toEqual([{ hash: Buffer.alloc(8, 1) }]);
+  expect(
+    db
+      .prepare("SELECT hash FROM phashes p JOIN files f ON f.id=p.file_id WHERE f.kind='video'")
+      .all()
+  ).toEqual(Array.from({ length: 9 }, () => ({ hash: Buffer.alloc(8, 2) })));
+  expect(db.prepare('SELECT count(*) AS n FROM phash_bands').get()).toEqual({ n: 40 });
+});
+it('does not reuse stale perceptual work after changed traversal is interrupted and reopened', async () => {
+  seed();
+  const path = await put('image.jpg', 'before');
+  await scan();
+  await put('image.jpg', 'changed content');
+  const lstat = vi.mocked(fs.lstat).mockImplementation(async (file, options) => {
+    const info = await realFs.lstat(file, options);
+    if (String(file) === path) scanner.cancel(scanner.current()!.id);
+    return info;
+  });
+  scanner.start();
+  await finished('cancelled');
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 0 });
+  lstat.mockImplementation(realFs.lstat);
+  await scanner.close();
+  db.close();
+  db = openDatabase(directory).db;
+  scanner = new Scanner(db, log);
+  await setAlgorithm('blake2b512');
+  hash.mockClear();
+  vi.mocked(hashing.imageHash).mockClear();
+  await scan();
+  expect(hash).toHaveBeenCalledExactlyOnceWith(path, 'blake2b512');
+  expect(hashing.imageHash).toHaveBeenCalledExactlyOnceWith(path);
+});
+it('re-hashes excluded and missing returns and samples only content changed while excluded', async () => {
+  seed();
+  await put('unchanged.jpg', 'content');
+  await put('changed.jpg', 'content');
+  await put('returned.jpg', 'content');
+  await scan();
+  const returned = join(media, 'returned.jpg');
+  const absent = join(directory, 'absent.jpg');
+  await fs.rename(returned, absent);
+  setSizes(1);
+  await scan();
+  await put('changed.jpg', 'changed while excluded');
+  await scan();
+  await setAlgorithm('blake2b512');
+  await fs.rename(absent, returned);
+  setSizes(0);
+  hash.mockClear();
+  vi.mocked(hashing.imageHash).mockClear();
+  await scan();
+  expect(hash).toHaveBeenCalledTimes(3);
+  expect(hashing.imageHash).toHaveBeenCalledExactlyOnceWith(join(media, 'changed.jpg'));
+  expect(files().every((file) => (file as { status: string }).status === 'done')).toBe(true);
+});
+it('combines algorithm changes with frame backfill without resampling unchanged images', async () => {
+  seed();
+  await put('image.jpg');
+  await put('clip.mp4');
+  await scan();
+  await setAlgorithm('blake2b512', { video_frame_count: 3 });
+  hash.mockClear();
+  vi.mocked(hashing.imageHash).mockClear();
+  const decode = vi
+    .mocked(video.videoHash)
+    .mockClear()
+    .mockResolvedValue({
+      hashes: Array.from({ length: 3 }, () => Buffer.alloc(8)),
+      width: 320,
+      height: 240,
+      duration: 2,
+      duration_ms: 2000,
+    });
+  await scan();
+  expect(hash).toHaveBeenCalledTimes(2);
+  expect(hashing.imageHash).not.toHaveBeenCalled();
+  expect(decode).toHaveBeenCalledTimes(1);
+  expect(db.prepare('SELECT count(*) AS n FROM phashes').get()).toEqual({ n: 4 });
+});
 const setSizes = (min: number, max = 0) => {
   db.prepare("UPDATE settings SET value=? WHERE key='min_file_size_mb'").run(String(min));
   db.prepare("UPDATE settings SET value=? WHERE key='max_file_size_mb'").run(String(max));

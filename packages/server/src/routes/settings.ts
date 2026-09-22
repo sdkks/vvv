@@ -8,7 +8,12 @@ import type {
   UpdateSettingsResponse,
 } from '@vvv/shared';
 import { retention } from '../quarantine.js';
-import { matchingSetting, matchingSettings, validSizeRange } from '../matching-settings.js';
+import {
+  fileHashAlgorithm,
+  matchingSetting,
+  matchingSettings,
+  validSizeRange,
+} from '../matching-settings.js';
 
 export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
   const read = (): Settings => {
@@ -28,6 +33,7 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
           properties: {
             retention_days: { type: 'integer', minimum: 1, maximum: 3650 },
             auto_purge_enabled: { type: 'boolean' },
+            file_hash_algorithm: { type: 'string', enum: ['sha256', 'blake2b512'] },
             match_images_enabled: { type: 'boolean' },
             match_videos_enabled: { type: 'boolean' },
             image_phash_threshold: { type: 'integer', minimum: 0, maximum: 64 },
@@ -62,8 +68,11 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
             error: 'invalid_settings',
             fields: { max_file_size_mb: 'Maximum must be at least minimum when both are enabled.' },
           });
-        const changed = (key: keyof MatchingControls) =>
+        const changed = (key: Exclude<keyof MatchingControls, 'file_hash_algorithm'>) =>
           request.body[key] !== undefined && Number(request.body[key]) !== matchingSetting(db, key);
+        const algorithm =
+          request.body.file_hash_algorithm !== undefined &&
+          request.body.file_hash_algorithm !== fileHashAlgorithm(db);
         const thresholds = changed('image_phash_threshold') || changed('video_phash_threshold');
         const frames = changed('video_frame_count');
         const timeout = changed('video_timeout_ms');
@@ -71,11 +80,14 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
         const toggled = (['image', 'video'] as const).filter((kind) =>
           changed(`match_${kind}s_enabled`)
         );
-        // Do not let an in-flight sampler restore old frames or a matcher mix settings.
-        if (frames && db.prepare("SELECT 1 FROM scans WHERE status='running' LIMIT 1").get())
+        // Prevent in-flight work from restoring invalidated checkpoints or mixing settings.
+        if (
+          (frames || algorithm) &&
+          db.prepare("SELECT 1 FROM scans WHERE status='running' LIMIT 1").get()
+        )
           return reply.code(409).send({ error: 'settings_scan_running' });
         if (
-          (frames || thresholds || toggled.length > 0) &&
+          (frames || algorithm || thresholds || toggled.length > 0) &&
           db.prepare("SELECT 1 FROM match_runs WHERE status='building' LIMIT 1").get()
         )
           return reply.code(409).send({ error: 'settings_match_running' });
@@ -89,7 +101,18 @@ export function settingsRoutes(app: FastifyInstance, db: Database.Database) {
             UPDATE files SET status='pending',updated_at=datetime('now')
               WHERE kind='video' AND status IN ('done','hashed')`);
         }
+        if (algorithm) {
+          // sha256 is the legacy column name for the selected content-hash algorithm.
+          // Clear every obsolete checkpoint, but preserve unavailable/excluded/error statuses.
+          db.exec(`UPDATE files SET sha256=NULL WHERE sha256 IS NOT NULL;
+            UPDATE files SET status='pending' WHERE sha256 IS NULL AND status IN ('done','hashed')`);
+        }
         const consequences: SettingsConsequence[] = [];
+        if (algorithm)
+          consequences.push({
+            type: 'rehash_required',
+            message: 'All files will be re-hashed with the new algorithm on the next scan.',
+          });
         if (thresholds) consequences.push({ type: 'rematch_required', reason: 'threshold_change' });
         if (frames) consequences.push({ type: 'rescan_required', reason: 'frame_count_change' });
         if (timeout) consequences.push({ type: 'future_sampling_only', reason: 'timeout_change' });

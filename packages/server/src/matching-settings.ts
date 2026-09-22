@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { FileSizePolicy, MatchingSettings } from '@vvv/shared';
+import type { FileHashAlgorithm, FileSizePolicy, MatchingSettings } from '@vvv/shared';
 
 const defaults = {
   match_images_enabled: { value: 1, min: 0, max: 1 },
@@ -31,6 +31,14 @@ export function matchingSetting(db: Database.Database, key: keyof typeof default
   return numericSetting(db, key, value, max, min);
 }
 
+export function fileHashAlgorithm(db: Database.Database): FileHashAlgorithm {
+  const row = db.prepare("SELECT value FROM settings WHERE key='file_hash_algorithm'").get() as
+    { value: string } | undefined;
+  const value = row?.value ?? 'sha256';
+  if (value !== 'sha256' && value !== 'blake2b512') throw new Error('Invalid file_hash_algorithm');
+  return value;
+}
+
 export function matchingEnabled(db: Database.Database, kind: 'image' | 'video') {
   return matchingSetting(db, `match_${kind}s_enabled`) === 1;
 }
@@ -49,12 +57,15 @@ export function fileSizeSettings(db: Database.Database): FileSizePolicy {
 }
 
 export function matchingSettings(db: Database.Database): MatchingSettings {
+  const algorithm = fileHashAlgorithm(db);
   return {
     ...fileSizeSettings(db),
+    file_hash_algorithm: algorithm,
     methods: [
       {
         id: 'exact',
-        label: 'Exact duplicates (SHA-256)',
+        label: `Exact duplicates — ${algorithm === 'sha256' ? 'SHA-256' : 'BLAKE2B-512'}`,
+        algorithm,
         scope: 'all files',
         enabled: true,
         threshold: null,

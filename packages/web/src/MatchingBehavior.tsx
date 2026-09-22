@@ -66,7 +66,7 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
         completed match run. Frame count and sampling timeout apply when videos are sampled.
       </p>
       <p>
-        No AI or neural methods are used. Matching runs entirely locally: SHA-256 content hashes and
+        No AI or neural methods are used. Matching runs entirely locally: content hashes and
         perceptual dHash comparisons.
       </p>
       <details>

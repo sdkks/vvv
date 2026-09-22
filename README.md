@@ -78,6 +78,35 @@ not the password. Without a stable session secret, users sign in again after a
 restart and return to their previous browser location. No telemetry or external
 runtime services are used. `GET /api/health` is public and checks the database.
 
+## Content hash algorithm
+
+Settings → Advanced matching controls lets you choose **SHA-256** (default; strongest,
+hardware-accelerated on many CPUs) or **BLAKE2B-512** (fast software hash). Both run
+locally using Node's built-in crypto. Large-media hashing is I/O-bound, so the potential
+speed benefit is greatest with many small files and depends on your hardware.
+Exact matching stays always on; the Matching behavior row shows the saved algorithm.
+
+`PATCH /api/settings` accepts the top-level `file_hash_algorithm` key with exactly
+`"sha256"` or `"blake2b512"`; other values return 400. `GET /api/settings` reports it as
+`matching.file_hash_algorithm` and as `algorithm` on the exact method row. An actual
+change returns `{ "type": "rehash_required", "message": "All files will be re-hashed
+with the new algorithm on the next scan." }`. Saving the same value does not invalidate
+anything. Algorithm changes are refused with 409 during a scan or matching run.
+
+Changing the algorithm clears every stored content hash in the same transaction as
+the setting update. Done/hashed files become pending. Missing, quarantined, excluded,
+and error files retain their statuses but lose obsolete content-hash checkpoints;
+they re-hash when restored, rediscovered, included, or retried. Existing perceptual
+hashes are preserved: unchanged files do not need re-sampling. Actual size/mtime
+changes still invalidate stale perceptual work and cause fresh analysis.
+
+Start a scan after saving; scans automatically run matching afterwards. The settings
+form withholds its Re-match action while the re-hash consequence is outstanding, just
+as it does for frame-count changes. Previously published results are not a new match
+run. Each scan snapshots the algorithm; all surviving content-hash checkpoints use
+that algorithm. The SQLite column remains named `sha256` for compatibility, but stores
+the selected algorithm's hex digest (64 characters for SHA-256, 128 for BLAKE2B-512).
+
 ## File-size inclusion filters
 
 Settings → Advanced matching controls offers inclusive minimum/maximum sizes in **MiB**
@@ -97,8 +126,9 @@ Excluded files remain in the catalog as `status='excluded'`. Their `error` colum
 an `excluded_by_size:` reason, not a processing failure. They count as discovered and
 processed (eligibility evaluated), never as scan errors, and do not enter groups,
 exports, or Trash. No source files are moved or deleted. On a later scan, widening the
-range returns eligible files to processing, reusing unchanged SHA-256 checkpoints;
-files excluded before their first processing receive full analysis. files excluded before their first processing receive full analysis. Excluded files
+range returns eligible files to processing, reusing unchanged content-hash checkpoints
+unless the algorithm changed; files excluded before their first processing receive full
+analysis. Excluded files
 follow the same missing sweep as processed files: a deleted excluded file is
 marked missing, and rediscovery re-evaluates the size policy (staying excluded or
 returning to processing as appropriate). Existing quarantine and pending

@@ -1,11 +1,37 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { expect, it } from 'vitest';
-import { bandProbes, dHash, hamming, hashBands, imageHash, storeImageHash } from './hashing.js';
+import {
+  bandProbes,
+  dHash,
+  hamming,
+  hashBands,
+  imageHash,
+  processFile,
+  storeImageHash,
+} from './hashing.js';
 import { openDatabase } from './db.js';
 
+it('streams stable distinct content digests with known SHA-256 and BLAKE2B-512 vectors', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vvv-content-hash-'));
+  try {
+    const path = join(root, 'content');
+    await writeFile(path, 'abc');
+    const sha = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+    const blake =
+      'ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923';
+    expect(await processFile(path)).toBe(sha);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await processFile(path, 'sha256')).toBe(sha);
+      expect(await processFile(path, 'blake2b512')).toBe(blake);
+    }
+    await expect(processFile(join(root, 'missing'), 'blake2b512')).rejects.toThrow('ENOENT');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 const blob = (n: bigint) => {
   const b = Buffer.alloc(8);
   b.writeBigUInt64BE(n);
