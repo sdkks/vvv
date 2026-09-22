@@ -125,6 +125,11 @@ export function Scan() {
         </p>
       )}
       <div className="toolbar">
+        {scan && (
+          <Link className="log-link" to={`/logs?scan_id=${scan.id}`}>
+            View logs
+          </Link>
+        )}
         {state === 'running' ? (
           <button
             disabled={action.isPending || cancelling}

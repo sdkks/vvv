@@ -11,6 +11,7 @@ import type {
   CurrentScanResponse,
   StartScanResponse,
   ScanErrorsResponse,
+  ScanLogsResponse,
   Settings,
   UpdateSettingsResponse,
   UpdateSettingsRequest,
@@ -20,6 +21,8 @@ import type {
   Page,
   TrashItem,
 } from '@vvv/shared';
+
+import type { LogLevelFilter } from './logs-state';
 
 export class ThumbnailUnavailableError extends Error {}
 
@@ -156,3 +159,17 @@ export const getScanErrors = (id: number, cursor: string, signal?: AbortSignal) 
   api<ScanErrorsResponse>(`/scans/${id}/errors?${new URLSearchParams({ cursor, limit: '50' })}`, {
     signal,
   });
+export const getScanLogs = (
+  scanId: number | undefined,
+  level: LogLevelFilter,
+  cursor = '',
+  signal?: AbortSignal
+) => {
+  const query = new URLSearchParams();
+  if (scanId) query.set('scan_id', String(scanId));
+  if (level) query.set('level', level);
+  if (cursor) query.set('cursor', cursor);
+  query.set('limit', '50');
+  return api<ScanLogsResponse>(`/scans/logs?${query}`, { signal });
+};
+export const scanLogsStream = (id: number) => `/api/scans/${id}/logs-stream`;

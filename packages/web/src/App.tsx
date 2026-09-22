@@ -7,6 +7,7 @@ import { api, login, returnLocation } from './api';
 import { Groups } from './Groups';
 import { Directories } from './Directories';
 import { Scan } from './Scan';
+import { Logs } from './Logs';
 import { Trash } from './Trash';
 import { Settings } from './Settings';
 import { PageHeading } from './PageHeading';
@@ -110,6 +111,7 @@ function Shell() {
         <NavLink to="/">Home</NavLink>
         <NavLink to="/directories">Directories</NavLink>
         <NavLink to="/scan">Scan</NavLink>
+        <NavLink to="/logs">Logs</NavLink>
         <NavLink to="/groups">Groups</NavLink>
         <NavLink to="/trash">Trash</NavLink>
         <NavLink to="/settings">Settings</NavLink>
@@ -138,6 +140,7 @@ export function App() {
           <Route path="/groups/:id?" element={<Groups />} />
           <Route path="/directories" element={<Directories />} />
           <Route path="/scan" element={<Scan />} />
+          <Route path="/logs" element={<Logs />} />
           <Route path="/trash" element={<Trash />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Home />} />
