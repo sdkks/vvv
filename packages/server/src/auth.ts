@@ -31,7 +31,7 @@ const plugin: FastifyPluginAsync<{ config: Config }> = async (app, { config }) =
           type: 'object',
           required: ['password'],
           additionalProperties: false,
-          properties: { password: { type: 'string' } },
+          properties: { password: { type: 'string' }, rememberMe: { type: 'boolean' } },
         },
       },
     },
@@ -47,7 +47,11 @@ const plugin: FastifyPluginAsync<{ config: Config }> = async (app, { config }) =
       }
       failures.delete(request.ip);
       return reply
-        .setCookie('vvv_session', `authenticated:${Date.now()}`, { ...cookieOptions, signed: true })
+        .setCookie('vvv_session', `authenticated:${Date.now()}`, {
+          ...cookieOptions,
+          signed: true,
+          ...(request.body.rememberMe === true ? { maxAge: 30 * 24 * 60 * 60 } : {}),
+        })
         .code(204)
         .send();
     }

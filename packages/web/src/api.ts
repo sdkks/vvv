@@ -1,4 +1,5 @@
 import type {
+  LoginRequest,
   GroupKind,
   GroupResponse,
   GroupsResponse,
@@ -127,6 +128,7 @@ const jsonBody = (method: string, body: object): RequestInit => ({
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
+export const login = (body: LoginRequest) => api('/auth/login', jsonBody('POST', body));
 export const getSettings = () => api<Settings>('/settings');
 export const updateSettings = (body: UpdateSettingsRequest) =>
   api<UpdateSettingsResponse>('/settings', jsonBody('PATCH', body));

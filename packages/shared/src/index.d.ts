@@ -1,5 +1,6 @@
 export interface LoginRequest {
   password: string;
+  rememberMe?: boolean;
 }
 export type LoginResponse = void;
 export type LogoutResponse = void;

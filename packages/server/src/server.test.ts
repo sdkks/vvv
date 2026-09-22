@@ -11,11 +11,11 @@ let directory: string;
 let app: Awaited<ReturnType<typeof createServer>>;
 let config: Config;
 const password = 'test-only shared password λ';
-const login = (value = password, remoteAddress = '127.0.0.1') =>
+const login = (value = password, remoteAddress = '127.0.0.1', rememberMe?: boolean) =>
   app.inject({
     method: 'POST',
     url: '/api/auth/login',
-    payload: { password: value },
+    payload: { password: value, rememberMe },
     remoteAddress,
   });
 
@@ -46,45 +46,67 @@ describe('authentication boundary', () => {
     }
     expect((await app.inject({ method: 'POST', url: '/api/auth/logout' })).statusCode).toBe(401);
   });
-  it('signs a password-free cookie, rejects tampering and clears it on logout', async () => {
-    const response = await login();
-    expect(response.statusCode).toBe(204);
-    const header = String(response.headers['set-cookie']);
-    expect(header).toContain('HttpOnly');
-    expect(header).toContain('SameSite=Lax');
-    expect(header).toContain('Path=/');
-    expect(header).not.toContain(password);
-    const cookie = header.split(';')[0] ?? '';
-    expect((await app.inject({ url: '/api/private', headers: { cookie } })).json()).toEqual({
-      protected: true,
-    });
-    expect((await app.inject({ url: '/api/auth/session', headers: { cookie } })).json()).toEqual({
-      authenticated: true,
-    });
-    expect(
-      (await app.inject({ url: '/api/auth/session', headers: { cookie: cookie + 'x' } })).statusCode
-    ).toBe(401);
-    const logout = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie },
-    });
-    expect(logout.statusCode).toBe(204);
-    expect(logout.headers['set-cookie']).toContain('Expires=Thu, 01 Jan 1970');
-  });
-  it('rejects a signed but non-session payload and a previous boot secret', async () => {
-    const cookie = `vvv_session=${encodeURIComponent(app.signCookie('not a session'))}`;
-    expect((await app.inject({ url: '/api/private', headers: { cookie } })).statusCode).toBe(401);
-    const previous = String((await login()).headers['set-cookie']).split(';')[0] ?? '';
-    await app.close();
-    app = await createServer(
-      { ...config, sessionSecret: 'a different test-only session secret' },
-      false
-    );
-    expect(
-      (await app.inject({ url: '/api/auth/session', headers: { cookie: previous } })).statusCode
-    ).toBe(401);
-  });
+  it.each([undefined, false, true])(
+    'signs a password-free cookie with rememberMe=%s, rejects tampering and clears it on logout',
+    async (rememberMe) => {
+      const response = await login(password, '127.0.0.1', rememberMe);
+      expect(response.statusCode).toBe(204);
+      const header = String(response.headers['set-cookie']);
+      expect(header).toContain('HttpOnly');
+      expect(header).toContain('SameSite=Lax');
+      expect(header).toContain('Path=/');
+      expect(header).not.toContain(password);
+      expect(header).not.toContain('Expires=');
+      if (rememberMe === true) expect(header).toContain('Max-Age=2592000;');
+      else expect(header).not.toContain('Max-Age=');
+      const cookie = header.split(';')[0] ?? '';
+      expect((await app.inject({ url: '/api/private', headers: { cookie } })).json()).toEqual({
+        protected: true,
+      });
+      expect((await app.inject({ url: '/api/auth/session', headers: { cookie } })).json()).toEqual({
+        authenticated: true,
+      });
+      expect(
+        (await app.inject({ url: '/api/auth/session', headers: { cookie: cookie + 'x' } }))
+          .statusCode
+      ).toBe(401);
+      const logout = await app.inject({
+        method: 'POST',
+        url: '/api/auth/logout',
+        headers: { cookie },
+      });
+      expect(logout.statusCode).toBe(204);
+      expect(logout.headers['set-cookie']).toContain('Expires=Thu, 01 Jan 1970');
+      expect(logout.headers['set-cookie']).toContain('Max-Age=0;');
+      expect(logout.headers['set-cookie']).toContain('Path=/');
+      expect(logout.headers['set-cookie']).toContain('HttpOnly');
+      expect(logout.headers['set-cookie']).toContain('SameSite=Lax');
+    }
+  );
+  it.each([undefined, false, true])(
+    'with rememberMe=%s, still requires a valid session and the same secret across restarts',
+    async (rememberMe) => {
+      const cookie = `vvv_session=${encodeURIComponent(app.signCookie('not a session'))}`;
+      expect((await app.inject({ url: '/api/private', headers: { cookie } })).statusCode).toBe(401);
+      const previous =
+        String((await login(password, '127.0.0.1', rememberMe)).headers['set-cookie']).split(
+          ';'
+        )[0] ?? '';
+      await app.close();
+      app = await createServer(config, false);
+      expect(
+        (await app.inject({ url: '/api/auth/session', headers: { cookie: previous } })).json()
+      ).toEqual({ authenticated: true });
+      await app.close();
+      app = await createServer(
+        { ...config, sessionSecret: 'a different test-only session secret' },
+        false
+      );
+      expect(
+        (await app.inject({ url: '/api/auth/session', headers: { cookie: previous } })).statusCode
+      ).toBe(401);
+    }
+  );
   it('delays unequal-length passwords exponentially, caps delay, isolates IPs and resets on success', async () => {
     for (let i = 0; i < 8; i++) expect((await login('x')).statusCode).toBe(401);
     expect(vi.mocked(delay).mock.calls.map(([ms]) => ms)).toEqual([
@@ -96,12 +118,29 @@ describe('authentication boundary', () => {
     await login('wrong');
     expect(delay).toHaveBeenLastCalledWith(500);
   });
-  it.each([{}, { password: 123 }, { password: null }, { password, extra: true }])(
-    'rejects malformed login bodies without coercion: %j',
-    async (payload) => {
-      const result = await app.inject({ method: 'POST', url: '/api/auth/login', payload });
-      expect(result.statusCode).toBe(400);
-      expect(result.body).not.toContain(password);
+  it.each([undefined, false, true])(
+    'still rejects wrong passwords with rememberMe=%s',
+    async (rememberMe) => {
+      const response = await login('wrong', '127.0.0.1', rememberMe);
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      expect(delay).toHaveBeenLastCalledWith(500);
     }
   );
+  it.each([
+    {},
+    { password: 123 },
+    { password: null },
+    { password, extra: true },
+    ...['true', 'false', 0, 1, null, [], [true], {}].map((rememberMe) => ({
+      password,
+      rememberMe,
+    })),
+  ])('rejects malformed login bodies without coercion: %j', async (payload) => {
+    const result = await app.inject({ method: 'POST', url: '/api/auth/login', payload });
+    expect(result.statusCode).toBe(400);
+    expect(result.body).not.toContain(password);
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(delay).not.toHaveBeenCalled();
+  });
 });

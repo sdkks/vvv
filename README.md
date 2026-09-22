@@ -53,6 +53,9 @@ The image includes the built UI, API, and checksum-verified ffmpeg/ffprobe.
 | `PORT`               | 8080. The Vite development proxy uses the same PORT value.                                                                                                                                       |
 | `DATA_DIR`           | `./data`, relative to the server working directory (`packages/server` under `pnpm dev`). Created automatically; must be writable. Use a path outside the checkout to keep local data out of Git. |
 
+“Remember me for 30 days” sets a persistent login cookie; surviving server restarts
+requires a stable `VVV_SESSION_SECRET`, since a per-boot secret still invalidates it.
+
 `SERVE_WEB_DIST` overrides the SPA directory (default: `packages/web/dist`, resolved
 relative to the server module; `/app/web` in the image). Serving is enabled only
 when `index.html` exists; development without a build still works through Vite.

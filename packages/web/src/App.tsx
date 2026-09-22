@@ -3,13 +3,20 @@ import type { FormEvent } from 'react';
 import { NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, SessionResponse } from '@vvv/shared';
-import { api, returnLocation } from './api';
+import { api, login, returnLocation } from './api';
 import { Groups } from './Groups';
 import { Directories } from './Directories';
 import { Scan } from './Scan';
 import { Trash } from './Trash';
 import { Settings } from './Settings';
 import { PageHeading } from './PageHeading';
+
+export function loginPayload(data: FormData): LoginRequest {
+  return {
+    password: String(data.get('password') ?? ''),
+    rememberMe: data.has('rememberMe'),
+  };
+}
 
 function Login() {
   const [error, setError] = useState('');
@@ -20,15 +27,11 @@ function Login() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    const password = String(new FormData(event.currentTarget).get('password') ?? '');
+    const body = loginPayload(new FormData(event.currentTarget));
     setPending(true);
     setError('');
     try {
-      await api('/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password } satisfies LoginRequest),
-      });
+      await login(body);
       cache.clear();
       await navigate(returnLocation(location.search, window.location.origin), { replace: true });
     } catch (error) {
@@ -58,6 +61,19 @@ function Login() {
           aria-invalid={Boolean(error)}
         />
         <p id="password-hint">Use the password configured with VVV_PASSWORD on your server.</p>
+        <label className="scan-option" htmlFor="remember-me">
+          <input
+            id="remember-me"
+            name="rememberMe"
+            type="checkbox"
+            aria-describedby="remember-me-hint"
+            disabled={pending}
+          />
+          Remember me for 30 days
+        </label>
+        <p id="remember-me-hint" className="metadata">
+          Requires a stable session secret to survive server restarts.
+        </p>
         <p id="login-error" role="alert">
           {error}
         </p>
