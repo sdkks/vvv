@@ -56,7 +56,8 @@ VM; do not remove the machine if you need to retain it. Linux needs no extra VM.
 
 ## Compose
 
-Compose reads `VVV_PASSWORD` (required), `MEDIA_DIR` (media mount),
+Compose reads `VVV_PASSWORD` (defaults to the demo value `vvv-demo` — change it for
+real use), `MEDIA_DIR` (media mount),
 `MEDIA_MOUNT_MODE` (`ro` default, `rw` enables quarantine), and `VVV_PORT`
 (host port, default 8080) from your environment.
 
@@ -67,10 +68,10 @@ A `compose.yml` is provided at the repo root and works with `podman compose` or
 podman compose -f compose.yml up -d
 ```
 
-Set `VVV_PASSWORD` and `MEDIA_DIR` in your shell before starting. The example defaults
-to `change-me` and `./media`; create the media directory first or choose an existing
-VM-visible path. A Compose provider is required by `podman compose`. The server
-refuses to boot with a missing/empty password; the example default is not secure.
+Set `MEDIA_DIR` in your shell before starting; the example defaults to `./media` —
+create it first or choose an existing VM-visible path. A Compose provider is
+required by `podman compose`. The demo password is publicly known (it is in this
+repository); change `VVV_PASSWORD` for anything beyond local trials.
 
 ## Health
 
