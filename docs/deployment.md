@@ -41,8 +41,9 @@ including deep links. Replace `change-me` with a strong password before deployme
 - `/data` — persistent SQLite state. Use a local filesystem, not a network mount
   (WAL requirement). The image runs as `node` (UID/GID 1000); a named volume inherits
   writable ownership. A bind mount instead must be writable by that mapped user.
-- Media mounts are read-only (`:ro`) for scanning; register `/media` through the API.
-  Quarantine/restore will require a writable media mount when those features ship.
+- Media mounts are read-only (`:ro`) by default for scanning; register `/media` through
+  the API. Quarantine (`.vvv-trash/` moves) needs a writable mount — set
+  `MEDIA_MOUNT_MODE=rw` (compose) or drop `:ro` in your `podman run` command.
 - On SELinux hosts, add `:Z` for private bind-mount labels (media: `:ro,Z`).
 
 ### macOS note
@@ -54,6 +55,10 @@ then pass the VM-side path to `podman run`. A named `/data` volume lives inside 
 VM; do not remove the machine if you need to retain it. Linux needs no extra VM.
 
 ## Compose
+
+Compose reads `VVV_PASSWORD` (required), `MEDIA_DIR` (media mount),
+`MEDIA_MOUNT_MODE` (`ro` default, `rw` enables quarantine), and `VVV_PORT`
+(host port, default 8080) from your environment.
 
 A `compose.yml` is provided at the repo root and works with `podman compose` or
 `podman-compose`:
