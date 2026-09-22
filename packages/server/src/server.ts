@@ -9,6 +9,7 @@ import { Scanner } from './scanner.js';
 import { scanRoutes } from './routes/scans.js';
 import { scanDirRoutes } from './routes/scan-dirs.js';
 import { Progress } from './progress.js';
+import { ScanLog } from './scan-log.js';
 import { serveWeb } from './web.js';
 import { Matcher } from './matcher.js';
 import { groupRoutes } from './routes/groups.js';
@@ -29,7 +30,8 @@ export async function createServer(config: Config, logger = true, webDist?: stri
   await mkdir(join(config.dataDir, 'thumbs'), { recursive: true });
   const { db, openReadOnly } = openDatabase(config.dataDir);
   const progress = new Progress();
-  const matcher = new Matcher(db, app.log);
+  const scanLog = new ScanLog();
+  const matcher = new Matcher(db, app.log, scanLog);
   const quarantine = new Quarantine(db, app.log);
   try {
     await reconcile(db, quarantine);
@@ -43,11 +45,13 @@ export async function createServer(config: Config, logger = true, webDist?: stri
     db,
     app.log,
     (snapshot) => progress.publish(snapshot),
-    () => matcher.afterScan(),
-    media
+    (scanId) => matcher.afterScan(scanId),
+    media,
+    scanLog
   );
   app.addHook('preClose', async () => {
     progress.close();
+    scanLog.close();
     media.shutdown.abort();
     await scanner.close();
     await matcher.close();
@@ -57,7 +61,7 @@ export async function createServer(config: Config, logger = true, webDist?: stri
     db.close();
   });
   await app.register(auth, { config });
-  scanRoutes(app, db, scanner, progress);
+  scanRoutes(app, db, scanner, progress, scanLog);
   scanDirRoutes(app, db);
   browseRoutes(app, db);
   groupRoutes(app, db, matcher);
@@ -70,5 +74,5 @@ export async function createServer(config: Config, logger = true, webDist?: stri
     return { status: 'ok', db: 'ok' };
   });
   await serveWeb(app, webDist);
-  return app;
+  return Object.assign(app, { scanLog });
 }
