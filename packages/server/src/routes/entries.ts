@@ -3,7 +3,13 @@ import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type Database from 'better-sqlite3';
 import type { DirectoryEntry, DirectoryEntries, EntryFilter, ScanDir } from '@vvv/shared';
-import { insideTrash, mediaKind, scanDecision, skipsSymlink } from '../traversal-policy.js';
+import {
+  insideTrash,
+  mediaKind,
+  outsideRoot,
+  scanDecision,
+  skipsSymlink,
+} from '../traversal-policy.js';
 import { idParams } from './scans.js';
 
 type Query = { path?: string; cursor?: string; limit?: string; filter?: EntryFilter };
@@ -12,10 +18,6 @@ const codeOf = (error: unknown) =>
 function fail(code: string, statusCode = 403): never {
   throw Object.assign(new Error(code), { code, statusCode });
 }
-const outside = (root: string, path: string) => {
-  const rel = relative(root, path);
-  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
-};
 type EntryKey = Pick<DirectoryEntry, 'kind' | 'name'>;
 const entryClass = (entry: EntryKey) => Number(entry.kind !== 'folder');
 const compare = (a: EntryKey, b: EntryKey) =>
@@ -28,7 +30,7 @@ async function entries(dir: ScanDir, query: Query): Promise<DirectoryEntries> {
     input.includes('\0') ||
     isAbsolute(input) ||
     win32.isAbsolute(input) ||
-    outside(dir.path, absolute)
+    outsideRoot(dir.path, absolute)
   )
     fail('invalid_preview_path', 400);
   if (insideTrash(input) || insideTrash(absolute)) fail('inside_trash');
@@ -52,7 +54,7 @@ async function entries(dir: ScanDir, query: Query): Promise<DirectoryEntries> {
       if (linked && dir.follow_symlinks) {
         const target = await realpath(path);
         if (insideTrash(target)) return { ...item, decision: 'inside_trash' };
-        if (outside(root, target))
+        if (outsideRoot(root, target))
           return {
             ...item,
             decision_detail: 'Symlink target is outside the registered directory.',

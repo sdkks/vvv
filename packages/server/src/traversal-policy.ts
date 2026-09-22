@@ -1,4 +1,4 @@
-import { extname, sep } from 'node:path';
+import { extname, isAbsolute, relative, sep } from 'node:path';
 import type { ScanDir, ScanDecision } from '@vvv/shared';
 
 type Policy = Pick<ScanDir, 'follow_symlinks' | 'cross_filesystems'>;
@@ -21,6 +21,10 @@ export function mediaKind(path: string) {
   const extension = extname(path).slice(1).toLowerCase();
   return images.has(extension) ? 'image' : videos.has(extension) ? 'video' : null;
 }
+export const outsideRoot = (root: string, path: string) => {
+  const rel = relative(root, path);
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+};
 export const insideTrash = (path: string) => path.split(sep).includes('.vvv-trash');
 export const skipsSymlink = (linked: boolean, follow: boolean | number) => linked && !follow;
 export const crossesBoundary = (root: bigint, device: bigint, cross: boolean | number) =>

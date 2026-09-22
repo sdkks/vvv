@@ -6,7 +6,13 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { ScanProgress } from '@vvv/shared';
 import { imageHash, processFile, storeHashes } from './hashing.js';
 import { MediaWork, mediaSetting, videoHash } from './video.js';
-import { crossesBoundary, insideTrash, mediaKind, skipsSymlink } from './traversal-policy.js';
+import {
+  crossesBoundary,
+  insideTrash,
+  mediaKind,
+  outsideRoot,
+  skipsSymlink,
+} from './traversal-policy.js';
 
 type Directory = {
   id: number;
@@ -147,7 +153,8 @@ export class Scanner {
     relative: string,
     root: bigint | undefined,
     ancestors: Set<string>,
-    scan: number
+    scan: number,
+    canonicalRoot?: string
   ): Promise<void> {
     if (this.cancelled) return;
     const absolute = join(dir.path, relative);
@@ -159,8 +166,22 @@ export class Scanner {
       info = await lstat(absolute, { bigint: true });
       linked = info.isSymbolicLink();
       if (skipsSymlink(linked, dir.follow_symlinks)) return;
+      canonicalRoot ??= await realpath(dir.path);
       if (linked || root === undefined) {
-        if (insideTrash(await realpath(absolute))) return;
+        const target = relative ? await realpath(absolute) : canonicalRoot;
+        if (insideTrash(target)) return;
+        if (outsideRoot(canonicalRoot, target)) {
+          this.record(
+            dir,
+            relative,
+            kind ?? 'other',
+            0n,
+            0n,
+            scan,
+            'Symlink target is outside the registered directory.'
+          );
+          return;
+        }
       }
       if (linked) info = await stat(absolute, { bigint: true });
     } catch (error) {
@@ -181,7 +202,7 @@ export class Scanner {
       try {
         for await (const entry of await opendir(absolute)) {
           if (this.cancelled) break;
-          await this.walk(dir, join(relative, entry.name), root, ancestors, scan);
+          await this.walk(dir, join(relative, entry.name), root, ancestors, scan, canonicalRoot);
         }
       } finally {
         ancestors.delete(key);

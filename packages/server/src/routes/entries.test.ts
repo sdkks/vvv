@@ -227,6 +227,57 @@ it('does not follow disabled links; reports escapes and never opens escaped desc
   expect(JSON.stringify(followed)).not.toContain(join(root, 'outside'));
 });
 
+it('agrees with scan outcomes for in-root and escaping file/directory links on the same fixture', async () => {
+  await put('inside/local.jpg');
+  await mkdir(join(root, 'outside'));
+  await writeFile(join(root, 'outside/private.jpg'), 'outside');
+  await symlink(join(root, 'outside'), join(media, 'outside-link'));
+  await symlink(join(root, 'outside/private.jpg'), join(media, 'escaped.jpg'));
+  await symlink(join(media, 'inside'), join(media, 'inside-link'));
+  await symlink(join(media, 'inside/local.jpg'), join(media, 'local-link.jpg'));
+  const alias = join(root, 'alias');
+  await symlink(media, alias);
+  db.prepare('UPDATE scan_dirs SET path=? WHERE id=1').run(alias);
+  policy(true);
+  vi.mocked(hashing.imageHash).mockResolvedValue({ hash: Buffer.alloc(8), width: 9, height: 8 });
+  const preview = await page();
+  const escaped = preview.items.filter((item) => item.decision === 'other');
+  expect(escaped.map((item) => item.name)).toEqual(['escaped.jpg', 'outside-link']);
+  for (const item of escaped)
+    expect(item.decision_detail).toBe('Symlink target is outside the registered directory.');
+  expect(
+    preview.items.filter((item) => item.decision === 'folder').map((item) => item.name)
+  ).toEqual(['inside', 'inside-link']);
+  expect(preview.items.find((item) => item.name === 'local-link.jpg')?.decision).toBe(
+    'would_process'
+  );
+  const start = await app.inject({ method: 'POST', url: '/api/scans', headers: { cookie } });
+  expect(start.statusCode).toBe(202);
+  const { id } = start.json<{ id: number }>();
+  await vi.waitFor(() => {
+    expect(
+      db.prepare('SELECT status,discovered,processed,errors FROM scans WHERE id=?').get(id)
+    ).toEqual({
+      status: 'done',
+      discovered: 5,
+      processed: 5,
+      errors: 2,
+    });
+  });
+  expect(
+    db.prepare("SELECT rel_path FROM files WHERE status='done' ORDER BY rel_path").all()
+  ).toEqual([
+    { rel_path: 'inside-link/local.jpg' },
+    { rel_path: 'inside/local.jpg' },
+    { rel_path: 'local-link.jpg' },
+  ]);
+  expect(
+    db.prepare("SELECT rel_path,error FROM files WHERE status='error' ORDER BY rel_path").all()
+  ).toEqual(escaped.map((item) => ({ rel_path: item.name, error: item.decision_detail })));
+  expect(hashing.processFile).toHaveBeenCalledTimes(3);
+  expect(hashing.imageHash).toHaveBeenCalledTimes(3);
+});
+
 it.each([false, true])(
   'enforces device boundaries for directories, files, and followed links (cross=%s)',
   async (cross) => {

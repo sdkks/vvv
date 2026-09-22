@@ -66,6 +66,7 @@ beforeEach(async () => {
     duration_ms: 2000,
   });
   vi.mocked(fs.lstat).mockImplementation(realFs.lstat);
+  vi.mocked(fs.realpath).mockImplementation(realFs.realpath);
   directory = await mkdtemp(join(tmpdir(), 'vvv-scanner-'));
   media = join(directory, 'media');
   await mkdir(media);
@@ -138,17 +139,20 @@ it.each([0, 1])(
   async (follow) => {
     seed(media, follow);
     await put('local.jpg');
-    const external = join(directory, 'external');
-    await mkdir(external);
-    await writeFile(join(external, 'external.mp4'), 'video');
-    await symlink(external, join(media, 'linked-dir'));
-    await symlink(join(external, 'external.mp4'), join(media, 'linked.mp4'));
-    await symlink(media, join(external, 'loop'));
+    const inside = join(media, 'inside');
+    await put('inside/clip.mp4', 'video');
+    await symlink(inside, join(media, 'linked-dir'));
+    await symlink(join(inside, 'clip.mp4'), join(media, 'linked.mp4'));
+    await symlink(media, join(inside, 'loop'));
     await symlink(media, join(media, 'self'));
     await scan();
-    expect(files().map((file) => (file as { rel_path: string }).rel_path)).toEqual(
-      follow ? ['linked-dir/external.mp4', 'linked.mp4', 'local.jpg'] : ['local.jpg']
+    const paths = follow
+      ? ['inside/clip.mp4', 'linked-dir/clip.mp4', 'linked.mp4', 'local.jpg']
+      : ['inside/clip.mp4', 'local.jpg'];
+    expect(files()).toEqual(
+      paths.map((rel_path) => expect.objectContaining({ rel_path, status: 'done', error: null }))
     );
+    expect(hash).toHaveBeenCalledTimes(paths.length);
   }
 );
 
@@ -160,6 +164,60 @@ it.each([0, 1])('honors the follow flag for a symlink scan root (%s)', async (fo
   await scan();
   expect(files()).toHaveLength(follow ? 1 : 0);
 });
+
+it.each([false, true])(
+  'confines same-device links, records both kinds of escape and preserves rescans (aliased root=%s)',
+  async (aliased) => {
+    await put('inside/local.jpg');
+    await symlink(join(media, 'inside'), join(media, 'inside-dir'));
+    await symlink(join(media, 'inside/local.jpg'), join(media, 'inside.jpg'));
+    const outside = join(directory, 'media-outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'external.jpg'), 'outside');
+    await symlink(outside, join(media, 'outside-dir'));
+    await symlink(join(outside, 'external.jpg'), join(media, 'outside.jpg'));
+    expect((await stat(outside)).dev).toBe((await stat(media)).dev);
+    const registered = aliased ? join(directory, 'root-link') : media;
+    if (aliased) await symlink(media, registered);
+    seed(registered, 1, 1);
+    let rowIds: unknown[] | undefined;
+    for (let scanId = 1; scanId <= 2; scanId++) {
+      vi.mocked(fs.stat).mockClear();
+      vi.mocked(fs.realpath).mockClear();
+      vi.mocked(fs.opendir).mockClear();
+      hash.mockClear();
+      await scan();
+      expect(scanner.current()).toMatchObject({ discovered: 5, processed: 5, errors: 2 });
+      expect(files()).toEqual([
+        ...['inside-dir/local.jpg', 'inside.jpg', 'inside/local.jpg'].map((rel_path) =>
+          expect.objectContaining({ rel_path, status: 'done', last_seen_scan_id: scanId })
+        ),
+        ...[
+          { rel_path: 'outside-dir', kind: 'other' },
+          { rel_path: 'outside.jpg', kind: 'image' },
+        ].map((file) => ({
+          ...file,
+          status: 'error',
+          sha256: null,
+          error: 'Symlink target is outside the registered directory.',
+          last_seen_scan_id: scanId,
+        })),
+      ]);
+      expect(hash).toHaveBeenCalledTimes(scanId === 1 ? 3 : 0);
+      expect(hash.mock.calls.every(([path]) => !path.includes('outside'))).toBe(true);
+      for (const operation of [fs.stat, fs.opendir])
+        expect(
+          vi.mocked(operation).mock.calls.every(([path]) => !String(path).includes('outside'))
+        ).toBe(true);
+      expect(
+        vi.mocked(fs.realpath).mock.calls.filter(([path]) => path === registered)
+      ).toHaveLength(1);
+      const currentIds = db.prepare('SELECT id,rel_path FROM files ORDER BY id').all();
+      if (rowIds) expect(currentIds).toEqual(rowIds);
+      rowIds = currentIds;
+    }
+  }
+);
 
 it('ignores broken non-media symlinks when following links', async () => {
   seed(media, 1);
@@ -380,6 +438,19 @@ it('interrupts an incomplete directory walk without incorrectly sweeping existin
   await scanInterrupted();
   expect(files()).toEqual([expect.objectContaining({ status: 'done' })]);
 });
+it('interrupts root resolution failures without sweeping existing files missing', async () => {
+  seed();
+  await put('good.jpg');
+  await scan();
+  const before = files();
+  vi.mocked(fs.realpath).mockRejectedValueOnce(
+    Object.assign(new Error('Root vanished'), { code: 'ENOENT' })
+  );
+  await scanInterrupted();
+  expect(files()).toEqual(before);
+  expect(scanner.current()).toMatchObject({ discovered: 0, processed: 0, errors: 0 });
+});
+
 async function scanInterrupted() {
   expect(scanner.start()).not.toBeNull();
   await finished('interrupted');
