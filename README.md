@@ -4,14 +4,13 @@ VVV is a content aware video matching tool to find and nuke your duplicate video
 
 Containers are built and run with **podman** (not docker) — see `docs/deployment.md` and `AGENTS.md`.
 
-# Roadmap
+# Screenshots
 
-- Support Videos
-- Support Images
-- Find duplicates by FS properties/stats and hashes
-- Find duplicates by image content comparison methods
-- Find videos by audio similarity matches
-- Find partial matches, whether your small video clip is part of a bigger video file
+### See matching groups:
+<img width="1152" height="729" alt="image" src="https://github.com/user-attachments/assets/8c9773dd-3b6f-46a1-8006-3d7e57e88e35" />
+
+### Individual selection or automatic marking of what to trash:
+<img width="901" height="789" alt="image" src="https://github.com/user-attachments/assets/9fa6239b-8029-426b-8cce-19ae076265f5" />
 
 # Development
 
