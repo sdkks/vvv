@@ -317,6 +317,9 @@ summary {
 .matching-method p {
   margin: 0 0 0.5rem;
 }
+.matching-method .matching-capability {
+  margin-top: 0.5rem;
+}
 .matching-badge {
   display: inline-block;
   padding: 0.1rem 0.4rem;

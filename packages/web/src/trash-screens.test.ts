@@ -8,6 +8,13 @@ import { Settings } from './Settings';
 import { Trash } from './Trash';
 import { UndoToast } from './UndoToast';
 
+const capabilitySentences = [
+  "Same file bytes only; re-encoded or resized copies won't match.",
+  'Finds similar images after resizing or re-encoding; it does not find different scenes.',
+  'Finds re-encoded or resized videos with aligned frames. Trims, clips, or changed intros may not match.',
+  'Finds a shorter recording inside a longer one, even with an offset. Both need audio; standalone audio files are included.',
+];
+
 const policy: Policy = {
   retention_days: 30,
   auto_purge_enabled: false,
@@ -165,6 +172,42 @@ it('shows Enabled and Off badges for saved switches while exact stays always on'
   expect(section.match(/class="matching-badge">Enabled/g)).toHaveLength(1);
   expect(section).toContain('all files · Always on');
 });
+it.each([
+  ['sha256', 'SHA-256', true],
+  ['sha256', 'SHA-256', false],
+  ['blake2b512', 'BLAKE2B-512', true],
+  ['blake2b512', 'BLAKE2B-512', false],
+] as const)(
+  'shows all capability hints below method status with %s (%s), perceptual enabled=%s',
+  (algorithm, label, enabled) => {
+    const html = render(Settings, [], {
+      ...policy,
+      matching: {
+        ...policy.matching,
+        file_hash_algorithm: algorithm,
+        methods: policy.matching.methods.map((method) =>
+          method.id === 'exact'
+            ? { ...method, algorithm, label: `Exact duplicates — ${label}` }
+            : { ...method, enabled }
+        ),
+      },
+    });
+    const section = html.slice(html.indexOf('<section'), html.indexOf('</section>'));
+    const terms = section.match(/<dt>.*?<\/dt>/g);
+    expect(terms).toHaveLength(4);
+    for (const [index, sentence] of capabilitySentences.entries()) {
+      const term = terms?.[index] ?? '';
+      expect(term).toContain(
+        renderToStaticMarkup(createElement('p', { className: 'matching-capability' }, sentence))
+      );
+      expect(term.indexOf('matching-capability')).toBeGreaterThan(term.indexOf('matching-badge'));
+    }
+    expect(section).toContain(`Exact duplicates — ${label}`);
+    if (algorithm === 'blake2b512') expect(section).not.toContain('SHA-256');
+    expect(section).toContain('Thresholds apply at match time, on the next match run.');
+    expect(section).not.toMatch(/<(input|select|button|form)\b/);
+  }
+);
 it('shows Current badges independently for customized thresholds and sampling values', () => {
   const html = render(Settings, [], {
     ...policy,

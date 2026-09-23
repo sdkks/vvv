@@ -15,6 +15,15 @@ import {
 } from './group-review';
 import { GroupDetail } from './GroupDetail';
 
+const capabilityHints = {
+  exact: "Same file bytes only; re-encoded or resized copies won't match.",
+  image: 'Finds similar images after resizing or re-encoding; it does not find different scenes.',
+  video:
+    'Finds re-encoded or resized videos with aligned frames. Trims, clips, or changed intros may not match.',
+  audio_partial:
+    'Finds a shorter recording inside a longer one, even with an offset. Both need audio; standalone audio files are included.',
+};
+
 export function Groups() {
   const { id } = useParams();
   const [search] = useSearchParams();
@@ -28,6 +37,7 @@ export function Groups() {
   const route = location.pathname + location.search;
   const recovering = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const changingKind = useRef(false);
   const navigate = useNavigate();
   const cache = useQueryClient();
   const query = useQuery({
@@ -58,7 +68,8 @@ export function Groups() {
   useEffect(() => {
     setObserving(null);
     setToast((current) => (current?.path === route ? current : undefined));
-    if (!id) heading.current?.focus();
+    if (!id && !changingKind.current) heading.current?.focus();
+    changingKind.current = false;
   }, [location.key, id, route]);
   useEffect(() => {
     if (observing !== location.key) return;
@@ -145,7 +156,9 @@ export function Groups() {
           Kind{' '}
           <select
             value={kind}
+            aria-describedby="kind-hint"
             onChange={(event) => {
+              changingKind.current = true;
               setHistory(['']);
               void navigate(`/groups${groupsSearch(kindFilter(event.target.value))}`);
             }}
@@ -167,6 +180,16 @@ export function Groups() {
           Refresh groups
         </button>
       </div>
+      <p id="kind-hint">
+        {kind ? (
+          capabilityHints[kind]
+        ) : (
+          <>
+            Different match types find different kinds of duplicates. See Matching behavior in{' '}
+            <Link to="/settings">Settings</Link>.
+          </>
+        )}
+      </p>
       {match.isError && <p role="alert">{match.error.message}</p>}
       {query.isPending && <p role="status">Loading groups…</p>}
       {query.isError && !(query.error instanceof ResultsChangedError) && (

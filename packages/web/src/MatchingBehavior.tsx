@@ -1,6 +1,16 @@
 import type { MatchingSettings } from '@vvv/shared';
 import { sizePolicyLabel } from './matching-controls';
 
+const capabilityHints = {
+  exact: "Same file bytes only; re-encoded or resized copies won't match.",
+  image_dhash:
+    'Finds similar images after resizing or re-encoding; it does not find different scenes.',
+  video_dhash:
+    'Finds re-encoded or resized videos with aligned frames. Trims, clips, or changed intros may not match.',
+  audio_chromaprint:
+    'Finds a shorter recording inside a longer one, even with an offset. Both need audio; standalone audio files are included.',
+};
+
 function ValueBadge({ current, fallback }: { current: number | null; fallback: number | null }) {
   return <span className="matching-badge">{current === fallback ? 'Default' : 'Current'}</span>;
 }
@@ -32,6 +42,7 @@ export function MatchingBehavior({ matching }: { matching: MatchingSettings }) {
                 {method.id === 'exact' ? ' · Always on' : ''}
               </span>
               <span className="matching-badge">{method.enabled ? 'Enabled' : 'Off'}</span>
+              <p className="matching-capability">{capabilityHints[method.id]}</p>
             </dt>
             <dd>
               <p>
