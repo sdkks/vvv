@@ -48,6 +48,11 @@ function decode(value: string): Cursor | null {
   return null;
 }
 export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher: Matcher) {
+  app.post('/api/matches/clear', async (_request, reply) => {
+    return matcher.clear()
+      ? reply.code(204).send()
+      : reply.code(409).send({ error: 'match_running' });
+  });
   app.post('/api/matches/run', async (_request, reply) => {
     const match_run = matcher.start();
     return match_run === null
@@ -77,7 +82,10 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
       const position = cursor ? decode(cursor) : null;
       if (
         cursor &&
-        (!position || position[1] !== (kind ?? '*') || position[2] !== sort || position[3] !== direction)
+        (!position ||
+          position[1] !== (kind ?? '*') ||
+          position[2] !== sort ||
+          position[3] !== direction)
       )
         return reply.code(400).send({ error: 'invalid_cursor' });
       if (position && position[0] !== run)

@@ -66,6 +66,47 @@ it('groups only completed equal-size equal-hash files, across directories and me
   ).toEqual({ n: 0 });
 });
 
+it('scopes exact groups to the originating scan selection', async () => {
+  put('image-a.jpg', 10, 'same');
+  put('image-b.jpg', 10, 'same');
+  put('video-a.mp4', 10, 'same', 'done', 'video');
+  put('video-b.mp4', 10, 'same', 'done', 'video');
+  const scanId = Number(
+    db.prepare("INSERT INTO scans(status,images,videos,audio) VALUES ('done',0,1,0)").run()
+      .lastInsertRowid
+  );
+  matcher.start(scanId);
+  await matcher.close();
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 2 });
+  expect(
+    db
+      .prepare('SELECT DISTINCT f.kind FROM dup_group_members m JOIN files f ON f.id=m.file_id')
+      .all()
+  ).toEqual([{ kind: 'video' }]);
+});
+
+it('uses the latest done scan selection for manual matching and defaults to all kinds without one', async () => {
+  put('image-a.jpg', 10, 'same');
+  put('image-b.jpg', 10, 'same');
+  put('video-a.mp4', 10, 'same', 'done', 'video');
+  put('video-b.mp4', 10, 'same', 'done', 'video');
+  db.exec("INSERT INTO scans(status,images,videos,audio) VALUES ('done',0,1,0)");
+  db.exec("INSERT INTO scans(status,images,videos,audio) VALUES ('done',1,0,0)");
+  matcher.start();
+  await matcher.close();
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 2 });
+  expect(
+    db
+      .prepare('SELECT DISTINCT f.kind FROM dup_group_members m JOIN files f ON f.id=m.file_id')
+      .all()
+  ).toEqual([{ kind: 'image' }]);
+
+  db.exec('DELETE FROM scans');
+  matcher.start();
+  await matcher.close();
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 4 });
+});
+
 it('publishes bounded chunks behind the old generation, atomically activates, then cleans up in chunks', async () => {
   put('old-a.jpg', 1, 'old');
   put('old-b.jpg', 1, 'old');
@@ -194,7 +235,7 @@ it('seeks member publication by exact hash instead of rescanning all completed f
   )?.[0];
   expect(sql).toBeDefined();
   prepare.mockRestore();
-  const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1, 1, 'same', 0, 10000) as {
+  const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1, 1, 'same', 0, 1, 1, 1, 10000) as {
     detail: string;
   }[];
   expect(
@@ -227,6 +268,36 @@ it.each(['pending', 'fs_done'])(
     expect(db.prepare('SELECT * FROM file_operations').all()).toHaveLength(1);
   }
 );
+
+it('uses the queued scan origin when consecutive scans have different selections', async () => {
+  put('image-a.jpg', 10, 'image-pair');
+  put('image-b.jpg', 10, 'image-pair');
+  put('video-a.mp4', 10, 'video-pair', 'done', 'video');
+  put('video-b.mp4', 10, 'video-pair', 'done', 'video');
+  db.transaction(() => {
+    for (let i = 0; i < 12001; i++) put(`filler-${i}.jpg`, 10, `filler-${i}`);
+  })();
+  const first = Number(
+    db.prepare("INSERT INTO scans(status,images,videos,audio) VALUES ('done',0,1,0)").run()
+      .lastInsertRowid
+  );
+  const second = Number(
+    db.prepare("INSERT INTO scans(status,images,videos,audio) VALUES ('done',1,0,0)").run()
+      .lastInsertRowid
+  );
+  const activated = vi.spyOn(log, 'info');
+  matcher.afterScan(first);
+  matcher.afterScan(second);
+  await vi.waitFor(() =>
+    expect(activated.mock.calls.filter((call) => call[1] === 'Matching activated')).toHaveLength(2)
+  );
+  await matcher.close();
+  expect(
+    db
+      .prepare('SELECT DISTINCT f.kind FROM dup_group_members m JOIN files f ON f.id=m.file_id')
+      .all()
+  ).toEqual([{ kind: 'image' }]);
+});
 
 it('coalesces scan completion during a match into one subsequent run', async () => {
   const started = vi.spyOn(log, 'info');

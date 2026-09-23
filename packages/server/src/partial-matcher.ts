@@ -51,7 +51,12 @@ type Verdict = { confidence: number; offset_seconds: number };
 export async function matchPartialAudio(
   db: Database.Database,
   run: number,
-  refresh: (groupId: number) => void
+  refresh: (groupId: number) => void,
+  kinds: { images: boolean; videos: boolean; audio: boolean } = {
+    images: true,
+    videos: true,
+    audio: true,
+  }
 ): Promise<PartialMatchStats> {
   if (!matchingEnabled(db, 'audio')) return { candidate_pairs: 0, groups: 0, hot_values: 0 };
   const minShared = matchingSetting(db, 'audio_candidate_min_shared');
@@ -74,8 +79,9 @@ export async function matchPartialAudio(
     db.prepare(
       `INSERT INTO audio_hot(value) SELECT s.value FROM audio_subfingerprints s
       JOIN files f ON f.id=s.file_id AND f.status='done'
+      WHERE (f.kind='video' AND ?) OR (f.kind='audio' AND ?)
       GROUP BY s.value HAVING count(*)>?`
-    ).run(hotCap);
+    ).run(Number(kinds.videos), Number(kinds.audio), hotCap);
     const hot_values = (db.prepare('SELECT count(*) AS n FROM audio_hot').get() as { n: number }).n;
     // The census is a once-per-run snapshot, so the vote-side set is loaded once too;
     // it stays exactly consistent with the temp table for the whole run and is small
@@ -87,6 +93,7 @@ export async function matchPartialAudio(
     );
     const anchors = db.prepare(
       `SELECT id FROM files f WHERE f.id>? AND f.status='done'
+      AND ((f.kind='video' AND ?) OR (f.kind='audio' AND ?))
       AND EXISTS(SELECT 1 FROM audio_subfingerprints s WHERE s.file_id=f.id)
       ORDER BY f.id LIMIT ${ANCHOR_BATCH}`
     );
@@ -97,18 +104,30 @@ export async function matchPartialAudio(
       SELECT a.file_id,b.file_id FROM audio_subfingerprints a
       JOIN audio_subfingerprints b ON b.value=a.value AND b.file_id>a.file_id
       WHERE a.file_id>? AND a.file_id<=?
-      AND EXISTS(SELECT 1 FROM files f WHERE f.id=a.file_id AND f.status='done')
-      AND EXISTS(SELECT 1 FROM files f WHERE f.id=b.file_id AND f.status='done')
+      AND EXISTS(SELECT 1 FROM files f WHERE f.id=a.file_id AND f.status='done' AND ((f.kind='video' AND ?) OR (f.kind='audio' AND ?)))
+      AND EXISTS(SELECT 1 FROM files f WHERE f.id=b.file_id AND f.status='done' AND ((f.kind='video' AND ?) OR (f.kind='audio' AND ?)))
       AND a.value NOT IN (SELECT value FROM audio_hot)
       GROUP BY a.file_id,b.file_id HAVING count(DISTINCT a.value)>=?`
     );
     let after = 0;
     let candidate_pairs = 0;
     for (;;) {
-      const batch = anchors.all(after) as { id: number }[];
+      const batch = anchors.all(after, Number(kinds.videos), Number(kinds.audio)) as {
+        id: number;
+      }[];
       if (!batch.length) break;
       const top = batch[batch.length - 1]!.id;
-      candidate_pairs += Number(join.run(after, top, minShared).changes);
+      candidate_pairs += Number(
+        join.run(
+          after,
+          top,
+          Number(kinds.videos),
+          Number(kinds.audio),
+          Number(kinds.videos),
+          Number(kinds.audio),
+          minShared
+        ).changes
+      );
       after = top;
       await pause();
     }

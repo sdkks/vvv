@@ -12,6 +12,7 @@ export function Scan() {
   const cache = useQueryClient();
   const [now, setNow] = useState(Date.now);
   const [reconnecting, setReconnecting] = useState(false);
+  const [kinds, setKinds] = useState({ images: true, videos: true, audio: true });
   const query = useQuery({
     queryKey: scanKey,
     queryFn: async ({ signal }) => {
@@ -58,7 +59,7 @@ export function Scan() {
   }, [cache, id, state, refetch]);
   const action = useMutation({
     mutationFn: (command: 'start' | number) =>
-      command === 'start' ? startScan() : cancelScan(command),
+      command === 'start' ? startScan(kinds) : cancelScan(command),
     onSettled: () => refetch(),
   });
   const cancelling = action.isSuccess && action.variables === id && state === 'running';
@@ -124,6 +125,28 @@ export function Scan() {
           No scan directories registered. <Link to="/directories">Add a scan directory</Link> first.
         </p>
       )}
+      <fieldset className="toolbar" disabled={action.isPending || state === 'running'}>
+        <legend>Include in this scan</legend>
+        {(['images', 'videos', 'audio'] as const).map((kind) => (
+          <label className="scan-option" key={kind}>
+            <input
+              type="checkbox"
+              checked={kinds[kind]}
+              aria-describedby={kind === 'audio' ? 'scan-audio-help' : undefined}
+              onChange={(event) => setKinds({ ...kinds, [kind]: event.target.checked })}
+            />
+            {kind === 'audio' ? 'Standalone audio' : kind[0]!.toUpperCase() + kind.slice(1)}
+          </label>
+        ))}
+        <p>
+          This choice applies to this scan only; it does not change the indexed catalog or saved
+          matching settings.
+        </p>
+        <p id="scan-audio-help">
+          Standalone audio controls audio files, not tracks in selected videos. Video soundtrack
+          matching still follows the Audio matching setting.
+        </p>
+      </fieldset>
       <div className="toolbar">
         {scan && (
           <Link className="log-link" to={`/logs?scan_id=${scan.id}`}>

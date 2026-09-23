@@ -93,6 +93,29 @@ it('detects a subset with offset and confidence on both members', async () => {
   expect(aggregates).toEqual({ total_bytes: 1000, reclaimable_bytes: 400 });
 });
 
+it('matches selected video soundtracks when standalone audio is unchecked', async () => {
+  const videoA = putFile('a.mp4', { kind: 'video', durationMs: 5000 });
+  const videoB = putFile('b.mp4', { kind: 'video', durationMs: 5000 });
+  const standaloneA = putFile('a.mp3', { kind: 'audio', durationMs: 5000 });
+  const standaloneB = putFile('b.mp3', { kind: 'audio', durationMs: 5000 });
+  const values = sequence(1000, 40);
+  for (const id of [videoA, videoB, standaloneA, standaloneB]) fingerprint(id, values);
+  const stats = await matchPartialAudio(db, 1, refresh, {
+    images: false,
+    videos: true,
+    audio: false,
+  });
+  expect(stats.groups).toBe(1);
+  expect(
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM dup_group_members m
+      JOIN files f ON f.id=m.file_id WHERE f.kind<>'video'`
+      )
+      .get()
+  ).toEqual({ n: 0 });
+});
+
 it('leaves unrelated audio ungrouped', async () => {
   const one = putFile('one.mp3', { durationMs: 5000 });
   const two = putFile('two.mp3', { durationMs: 5000 });
@@ -366,7 +389,9 @@ it('seeks candidates through the value index instead of scanning subfingerprints
   db.exec('CREATE TEMP TABLE audio_hot(value INTEGER PRIMARY KEY)');
   db.exec('CREATE TEMP TABLE audio_candidates(a INTEGER,b INTEGER,PRIMARY KEY(a,b))');
   try {
-    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0, 100, 20) as { detail: string }[];
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0, 100, 1, 1, 1, 1, 20) as {
+      detail: string;
+    }[];
     expect(
       plan.some(({ detail }) =>
         detail.includes('SEARCH b USING INDEX idx_audio_subfingerprints_value (value=?)')

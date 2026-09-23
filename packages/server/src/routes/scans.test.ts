@@ -29,7 +29,8 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 const current = () => app.inject({ url: '/api/scans/current', headers: { cookie } });
-const start = () => app.inject({ method: 'POST', url: '/api/scans', headers: { cookie } });
+const start = (payload?: object) =>
+  app.inject({ method: 'POST', url: '/api/scans', headers: { cookie }, payload });
 const cancel = (id: string | number) =>
   app.inject({ method: 'POST', url: `/api/scans/${id}/cancel`, headers: { cookie } });
 
@@ -107,6 +108,22 @@ it('returns 202/409, reports durable progress, cancels cooperatively and resumes
     })
   );
   expect(hashing.processFile).toHaveBeenCalledTimes(8);
+});
+
+it('persists explicit scan-kind booleans and rejects invalid selection fields', async () => {
+  for (const payload of [{ images: 'false' }, { videos: null }, { audio: 0 }, { unknown: true }]) {
+    const response = await start(payload);
+    expect(response.statusCode).toBe(400);
+  }
+  expect((await start({ images: false, videos: true, audio: false })).statusCode).toBe(202);
+  await vi.waitFor(async () => expect((await current()).json().status).toBe('done'));
+  const { db } = openDatabase(directory);
+  expect(db.prepare('SELECT images,videos,audio FROM scans WHERE id=1').get()).toEqual({
+    images: 0,
+    videos: 1,
+    audio: 0,
+  });
+  db.close();
 });
 
 it('validates cancel ids, rejects missing scans, and keeps terminal cancellation idempotent', async () => {

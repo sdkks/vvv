@@ -205,9 +205,15 @@ export function AdvancedMatching({ matching }: { matching: MatchingSettings }) {
             c.type === 'next_scan_required' ||
             c.type === 'match_enabled'
         ) && (
-          <button disabled={save.isPending || rematch.isPending} onClick={() => rematch.mutate()}>
-            {rematch.isPending ? 'Starting re-match…' : 'Re-match now'}
-          </button>
+          <>
+            <p>
+              Manual matching uses the media selection from the latest completed scan; before any
+              scan completes, all media kinds are included.
+            </p>
+            <button disabled={save.isPending || rematch.isPending} onClick={() => rematch.mutate()}>
+              {rematch.isPending ? 'Starting re-match…' : 'Re-match now'}
+            </button>
+          </>
         )}
       {rematch.isError && <p role="alert">{rematch.error.message}</p>}
     </details>

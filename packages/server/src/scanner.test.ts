@@ -91,6 +91,60 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
+it('skips unchecked kinds without changing their indexed metadata or marking them missing', async () => {
+  seed();
+  await Promise.all(['keep.jpg', 'keep.mp4', 'keep.mp3'].map((path) => put(path)));
+  await scan();
+  const before = db
+    .prepare('SELECT id,kind,status,sha256,last_seen_scan_id FROM files ORDER BY id')
+    .all();
+  const id = scanner.start({ images: false, videos: true, audio: false });
+  expect(id).not.toBeNull();
+  await finished();
+  const after = db
+    .prepare('SELECT id,kind,status,sha256,last_seen_scan_id FROM files ORDER BY id')
+    .all() as {
+    id: number;
+    kind: string;
+    status: string;
+    sha256: string;
+    last_seen_scan_id: number;
+  }[];
+  const previous = before as typeof after;
+  expect(after.filter((file) => file.kind !== 'video')).toEqual(
+    previous.filter((file) => file.kind !== 'video')
+  );
+  expect(after.find((file) => file.kind === 'video')?.last_seen_scan_id).toBe(id);
+  expect(db.prepare('SELECT images,videos,audio FROM scans WHERE id=?').get(id)).toEqual({
+    images: 0,
+    videos: 1,
+    audio: 0,
+  });
+});
+
+it('traverses suffixed directories even when their media kind is unchecked', async () => {
+  seed();
+  await put('archive.mp4/selected.jpg');
+  await put('unchecked.mp4');
+  await scan();
+  const prior = db
+    .prepare('SELECT id,kind,status,sha256,last_seen_scan_id FROM files WHERE rel_path=?')
+    .get('unchecked.mp4');
+
+  const id = scanner.start({ images: true, videos: false, audio: true });
+  expect(id).not.toBeNull();
+  await finished();
+
+  expect(files()).toContainEqual(
+    expect.objectContaining({ rel_path: 'archive.mp4/selected.jpg', kind: 'image', status: 'done' })
+  );
+  expect(
+    db
+      .prepare('SELECT id,kind,status,sha256,last_seen_scan_id FROM files WHERE rel_path=?')
+      .get('unchecked.mp4')
+  ).toEqual(prior);
+});
+
 it('discovers allowlisted images/videos in multiple roots, streams SHA-256, and excludes other types', async () => {
   expect(scanner.current()).toBeNull();
   seed();

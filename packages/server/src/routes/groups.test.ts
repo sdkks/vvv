@@ -82,9 +82,71 @@ async function pages(kind?: string) {
   return items;
 }
 
+it('clears generated groups while retaining match metadata, active pointer, and indexed files', async () => {
+  put('a.jpg');
+  put('b.jpg', 20);
+  const run = await match();
+  const beforeFiles = db.prepare('SELECT id,sha256,status FROM files ORDER BY id').all();
+  const beforeRuns = db.prepare('SELECT id,status FROM match_runs').all();
+  const cleared = await app.inject({
+    method: 'POST',
+    url: '/api/matches/clear',
+    headers: { cookie },
+  });
+  expect(cleared.statusCode).toBe(204);
+  expect(db.prepare('SELECT count(*) AS n FROM dup_groups').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT id,status FROM match_runs').all()).toEqual(beforeRuns);
+  expect(activeMatchRun(db)).toBe(run);
+  expect(db.prepare('SELECT id,sha256,status FROM files ORDER BY id').all()).toEqual(beforeFiles);
+});
+
+it('preserves groups and run metadata when clear conflicts with matching, then permits retry', async () => {
+  db.transaction(() => {
+    for (let i = 0; i < 503; i++) {
+      put(`${i}-a.jpg`, 10, `${i}`);
+      put(`${i}-b.jpg`, 10, `${i}`);
+    }
+  })();
+  const run = await match();
+  const beforeGroups = db.prepare('SELECT id,kind,member_count FROM dup_groups ORDER BY id').all();
+  const beforeMembers = db
+    .prepare('SELECT group_id,file_id FROM dup_group_members ORDER BY group_id,file_id')
+    .all();
+  const started = await start();
+  expect(started.statusCode).toBe(202);
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/api/matches/clear',
+    headers: { cookie },
+  });
+  expect(conflict.statusCode).toBe(409);
+  expect(conflict.json()).toEqual({ error: 'match_running' });
+  expect(db.prepare('SELECT id,kind,member_count FROM dup_groups ORDER BY id').all()).toEqual(
+    beforeGroups
+  );
+  expect(
+    db.prepare('SELECT group_id,file_id FROM dup_group_members ORDER BY group_id,file_id').all()
+  ).toEqual(beforeMembers);
+  await vi.waitFor(() => expect(activeMatchRun(db)).not.toBe(run));
+  await tick();
+  await tick();
+  const beforeClearRuns = db.prepare('SELECT id,status FROM match_runs').all();
+  const pointer = activeMatchRun(db);
+  expect(
+    (await app.inject({ method: 'POST', url: '/api/matches/clear', headers: { cookie } }))
+      .statusCode
+  ).toBe(204);
+  expect(db.prepare('SELECT id,status FROM match_runs').all()).toEqual(beforeClearRuns);
+  expect(activeMatchRun(db)).toBe(pointer);
+  expect(db.prepare('SELECT count(*) AS n FROM dup_groups').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT count(*) AS n FROM dup_group_members').get()).toEqual({ n: 0 });
+});
+
 it('rejects unauthenticated access to every new route before matching or exporting', async () => {
   for (const [method, url] of [
     ['POST', '/api/matches/run'],
+    ['POST', '/api/matches/clear'],
     ['GET', '/api/groups'],
     ['GET', '/api/groups/1'],
     ['GET', '/api/export.csv'],
@@ -204,7 +266,9 @@ it('pages both sort keys in both directions over live curl, including 60 tied gr
   const exec = promisify(execFile);
   const curl = async (query: URLSearchParams, authenticated = true) => {
     const { stdout } = await exec('curl', [
-      '--silent', '--show-error', '--fail-with-body',
+      '--silent',
+      '--show-error',
+      '--fail-with-body',
       ...(authenticated ? ['-H', `Cookie: ${cookie}`] : []),
       `${address}/api/groups?${query}`,
     ]);
@@ -226,15 +290,21 @@ it('pages both sort keys in both directions over live curl, including 60 tied gr
           firstCursor ||= page.next_cursor;
           query.set('cursor', page.next_cursor);
         }
-        const expected = db.prepare(
-          `SELECT id FROM dup_groups ${kind ? "WHERE kind='exact'" : ''} ORDER BY ${sort} ${direction},id ${direction === 'desc' ? 'ASC' : 'DESC'}`
-        ).all();
+        const expected = db
+          .prepare(
+            `SELECT id FROM dup_groups ${kind ? "WHERE kind='exact'" : ''} ORDER BY ${sort} ${direction},id ${direction === 'desc' ? 'ASC' : 'DESC'}`
+          )
+          .all();
         expect(items.map(({ id }) => ({ id }))).toEqual(expected);
         expect(items).toHaveLength(kind ? 66 : 132);
         expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);
         query.set('cursor', firstCursor);
-        expect(JSON.parse(Buffer.from(firstCursor, 'base64url').toString()).slice(0, 4))
-          .toEqual([run, kind || '*', sort, direction]);
+        expect(JSON.parse(Buffer.from(firstCursor, 'base64url').toString()).slice(0, 4)).toEqual([
+          run,
+          kind || '*',
+          sort,
+          direction,
+        ]);
         for (const [key, value] of [
           ['sort', sort === 'member_count' ? 'reclaimable_bytes' : 'member_count'],
           ['direction', direction === 'desc' ? 'asc' : 'desc'],
@@ -250,8 +320,13 @@ it('pages both sort keys in both directions over live curl, including 60 tied gr
       }
     }
   }
-  const sqls = [...new Set(prepare.mock.calls.map(([sql]) => sql)
-    .filter((sql) => sql.includes('FROM dup_groups INDEXED BY')))];
+  const sqls = [
+    ...new Set(
+      prepare.mock.calls
+        .map(([sql]) => sql)
+        .filter((sql) => sql.includes('FROM dup_groups INDEXED BY'))
+    ),
+  ];
   prepare.mockRestore();
   expect(sqls).toHaveLength(16); // First-page and seek queries for every key/kind/direction.
   for (const sql of sqls) {
@@ -259,7 +334,9 @@ it('pages both sort keys in both directions over live curl, including 60 tied gr
     const args = kind ? [run, 'exact'] : [run];
     const bindings = sql.includes('UNION ALL') ? [...args, 3, 50, ...args, 3, 18] : [...args, 18];
     const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings) as { detail: string }[];
-    expect(plan.some(({ detail }) => detail.includes('TEMP B-TREE') || detail.startsWith('SCAN '))).toBe(false);
+    expect(
+      plan.some(({ detail }) => detail.includes('TEMP B-TREE') || detail.startsWith('SCAN '))
+    ).toBe(false);
     const searches = plan.filter(({ detail }) => detail.startsWith('SEARCH dup_groups'));
     expect(searches).toHaveLength(sql.includes('UNION ALL') ? 2 : 1);
     const index = `idx_groups_${sql.includes('ORDER BY member_count') ? 'members' : 'page'}_${kind ? 'kind' : 'all'}`;
@@ -269,9 +346,13 @@ it('pages both sort keys in both directions over live curl, including 60 tied gr
       expect(searches[1]!.detail).toMatch(/(?:member_count|reclaimable_bytes)[<>]\?/);
     }
   }
-  const sorted = (await get('/api/groups?sort=member_count&direction=asc&limit=1')).json<GroupsResponse>();
+  const sorted = (
+    await get('/api/groups?sort=member_count&direction=asc&limit=1')
+  ).json<GroupsResponse>();
   const newRun = await match();
-  const stale = await get(`/api/groups?sort=member_count&direction=asc&cursor=${sorted.next_cursor}`);
+  const stale = await get(
+    `/api/groups?sort=member_count&direction=asc&cursor=${sorted.next_cursor}`
+  );
   expect(stale.statusCode).toBe(409);
   expect(stale.json()).toEqual({ error: 'stale_cursor', match_run: newRun });
 }, 30000);

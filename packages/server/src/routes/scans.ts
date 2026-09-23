@@ -9,6 +9,7 @@ import type {
   ScanLogsResponse,
   ScanProgress,
   StartScanResponse,
+  StartScanRequest,
 } from '@vvv/shared';
 import type { Scanner } from '../scanner.js';
 import type { Progress } from '../progress.js';
@@ -28,8 +29,24 @@ export function scanRoutes(
   progress: Progress,
   logs: ScanLog
 ) {
-  app.post('/api/scans', async (_request, reply) => {
-    const id = scanner.start();
+  app.post<{ Body: StartScanRequest | undefined }>('/api/scans', async (request, reply) => {
+    const body = request.body;
+    if (
+      body !== undefined &&
+      (!body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        Object.entries(body).some(
+          ([key, value]) =>
+            !['images', 'videos', 'audio'].includes(key) || typeof value !== 'boolean'
+        ))
+    )
+      return reply.code(400).send({ error: 'invalid_scan_options' });
+    const id = scanner.start({
+      images: body?.images ?? true,
+      videos: body?.videos ?? true,
+      audio: body?.audio ?? true,
+    });
     if (id === null) return reply.code(409).send({ error: 'scan_running' });
     return reply.code(202).send({ id } satisfies StartScanResponse);
   });

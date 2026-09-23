@@ -51,6 +51,19 @@ it.each([
   expect(html).not.toContain('Different match types find different kinds of duplicates.');
 });
 
+it('explains the effect of clearing matches before activation and manual matching scope', () => {
+  const html = render('');
+  expect(html).toContain(
+    'Clear matches removes generated duplicate groups and results only; registered directories, indexed files, and hashes remain.'
+  );
+  expect(html.indexOf('Clear matches removes generated')).toBeLessThan(
+    html.indexOf('>Clear matches</button>')
+  );
+  expect(html).toContain(
+    'Manual matching uses the media selection from the latest completed scan; before any scan completes, all media kinds are included.'
+  );
+});
+
 it('keeps preview first and existing kind, count, bytes, and row destinations intact', () => {
   const html = render('image', {
     items: [

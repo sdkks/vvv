@@ -10,9 +10,10 @@ export async function matchPerceptual(
   db: Database.Database,
   run: number,
   refresh: (id: number) => void,
-  kind: 'image' | 'video'
+  kind: 'image' | 'video',
+  enabled = true
 ) {
-  if (!matchingEnabled(db, kind)) return { candidate_pairs: 0, skipped_buckets: [] };
+  if (!enabled || !matchingEnabled(db, kind)) return { candidate_pairs: 0, skipped_buckets: [] };
   const frames = kind === 'image' ? 1 : matchingSetting(db, 'video_frame_count');
   const cap = numericSetting(db, 'phash_bucket_cap', 2000, Number.MAX_SAFE_INTEGER);
   const threshold = matchingSetting(db, `${kind}_phash_threshold`);

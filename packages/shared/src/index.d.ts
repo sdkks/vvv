@@ -25,6 +25,11 @@ export interface ScanProgress {
   errors: number;
   current_file?: string;
 }
+export interface StartScanRequest {
+  images?: boolean;
+  videos?: boolean;
+  audio?: boolean;
+}
 export interface StartScanResponse {
   id: number;
 }

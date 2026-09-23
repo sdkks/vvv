@@ -12,6 +12,7 @@ import type {
   UpdateScanDirRequest,
   CurrentScanResponse,
   StartScanResponse,
+  StartScanRequest,
   ScanErrorsResponse,
   ScanLogsResponse,
   Settings,
@@ -174,7 +175,9 @@ export const updateScanDir = (id: number, body: UpdateScanDirRequest) =>
 export const removeScanDir = (id: number) => api(`/scan-dirs/${id}`, { method: 'DELETE' });
 export const getCurrentScan = (signal?: AbortSignal) =>
   api<CurrentScanResponse>('/scans/current', { signal });
-export const startScan = () => api<StartScanResponse>('/scans', { method: 'POST' });
+export const startScan = (body: StartScanRequest) =>
+  api<StartScanResponse>('/scans', jsonBody('POST', body));
+export const clearMatches = () => api('/matches/clear', { method: 'POST' });
 export const cancelScan = (id: number) =>
   request(`/scans/${id}/cancel`, { method: 'POST' }).then(() => undefined);
 export const getScanErrors = (id: number, cursor: string, signal?: AbortSignal) =>

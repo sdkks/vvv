@@ -36,7 +36,11 @@ it('renders idle onboarding and does not offer an enabled start until directorie
   expect(empty).toContain('No scan directories registered');
   expect(empty).toContain('href="/directories"');
   expect(empty).toMatch(/<button disabled="">Start scan<\/button>/);
-  expect(render(Scan, null)).toContain('<button>Start scan</button>');
+  const idle = render(Scan, null);
+  expect(idle).toContain('<button>Start scan</button>');
+  expect(idle).toContain('<legend>Include in this scan</legend>');
+  expect(idle.match(/type="checkbox"/g)).toHaveLength(3);
+  expect(idle).toContain('Standalone audio controls audio files, not tracks in selected videos');
 });
 it.each([
   ['running', 'Scan running', 'Cancel scan'],
@@ -61,6 +65,7 @@ it.each([
     expect(html).toContain('8 processed · 12 discovered · 2 errors');
     expect(html).toContain('Per-file errors (2)');
     expect(html).toContain('aria-live="polite"');
+    if (status === 'running') expect(html).toContain('<fieldset class="toolbar" disabled="">');
     if (status === 'running') {
       expect(html).toContain('No percentage estimate');
       expect(html).toContain('/media/&lt;movie&gt;.mp4');

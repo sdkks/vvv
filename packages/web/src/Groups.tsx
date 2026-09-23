@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GroupSort, QuarantineResponse, SortDirection } from '@vvv/shared';
-import { getGroups, GroupCursorError, groupsSearch, ResultsChangedError, runMatching, type KindFilter } from './api';
+import {
+  clearMatches,
+  getGroups,
+  GroupCursorError,
+  groupsSearch,
+  ResultsChangedError,
+  runMatching,
+  type KindFilter,
+} from './api';
 import { UndoToast } from './UndoToast';
 import {
   formatBytes,
@@ -52,24 +60,36 @@ export function Groups() {
     enabled: !id,
     retry: false,
   });
-  const onStale = useCallback((message = 'Results changed — a new match completed') => {
-    if (recovering.current) return;
-    recovering.current = true;
-    setObserving(null);
-    setNotice(message);
-    void recoverGroups(cache, kind, () => {
-      setHistory(['']);
-      void navigate(`/groups${groupsSearch(kind, '', sort, direction)}`, { replace: true });
-    }, sort, direction)
-      .catch(() => {
-        /* The list query renders recovery errors. */
-      })
-      .finally(() => {
-        recovering.current = false;
-      });
-  }, [cache, kind, sort, direction, navigate]);
+  const onStale = useCallback(
+    (message = 'Results changed — a new match completed') => {
+      if (recovering.current) return;
+      recovering.current = true;
+      setObserving(null);
+      setNotice(message);
+      void recoverGroups(
+        cache,
+        kind,
+        () => {
+          setHistory(['']);
+          void navigate(`/groups${groupsSearch(kind, '', sort, direction)}`, { replace: true });
+        },
+        sort,
+        direction
+      )
+        .catch(() => {
+          /* The list query renders recovery errors. */
+        })
+        .finally(() => {
+          recovering.current = false;
+        });
+    },
+    [cache, kind, sort, direction, navigate]
+  );
   useEffect(() => {
-    if (!id && (query.error instanceof ResultsChangedError || query.error instanceof GroupCursorError))
+    if (
+      !id &&
+      (query.error instanceof ResultsChangedError || query.error instanceof GroupCursorError)
+    )
       onStale(query.error.message);
   }, [id, query.error, onStale]);
   useEffect(() => {
@@ -83,7 +103,10 @@ export function Groups() {
     let attempts = 0;
     // No completion signal exists: observe for 20s, then leave Refresh available.
     const timer = setInterval(() => {
-      void cache.invalidateQueries({ queryKey: groupsKey(kind, cursor, sort, direction), exact: true });
+      void cache.invalidateQueries({
+        queryKey: groupsKey(kind, cursor, sort, direction),
+        exact: true,
+      });
       if (++attempts === 10) {
         setObserving(null);
         setNotice('Automatic checks paused. Use Refresh groups if matching is still running.');
@@ -94,6 +117,17 @@ export function Groups() {
   const match = useMutation({
     mutationFn: (route: string) => runMatching().then(() => route),
     onSuccess: setObserving,
+  });
+  const clear = useMutation({
+    mutationFn: clearMatches,
+    onSuccess: async () => {
+      setNotice('Generated matches were cleared. Registered directories and indexed files remain.');
+      await cache.invalidateQueries({ queryKey: ['groups'] });
+    },
+    onError: (error) => {
+      if (error.message.includes('Matching is already running'))
+        setNotice('Matching is in progress; matches were not cleared. Try again when it finishes.');
+    },
   });
   function page(next: string | undefined) {
     if (next === undefined) return;
@@ -181,7 +215,10 @@ export function Groups() {
         </label>
         <label>
           Sort by{' '}
-          <select value={sort} onChange={(event) => changeOrder(kind, groupSort(event.target.value), direction)}>
+          <select
+            value={sort}
+            onChange={(event) => changeOrder(kind, groupSort(event.target.value), direction)}
+          >
             <option value="reclaimable_bytes">Reclaimable space</option>
             <option value="member_count">Members</option>
           </select>
@@ -198,10 +235,34 @@ export function Groups() {
         >
           {match.isPending ? 'Starting matching…' : 'Re-run matching'}
         </button>
+        <p>
+          Clear matches removes generated duplicate groups and results only; registered directories,
+          indexed files, and hashes remain.
+        </p>
+        <button
+          disabled={clear.isPending || observing === location.key}
+          onClick={() => {
+            if (
+              window.confirm(
+                'Clear generated duplicate groups and results only? Registered directories and indexed files and hashes will remain.'
+              )
+            )
+              clear.mutate();
+          }}
+        >
+          {clear.isPending ? 'Clearing matches…' : 'Clear matches'}
+        </button>
         <button disabled={query.isFetching} onClick={() => void query.refetch()}>
           Refresh groups
         </button>
       </div>
+      <p>
+        Manual matching uses the media selection from the latest completed scan; before any scan
+        completes, all media kinds are included.
+      </p>
+      {clear.isError && !clear.error.message.includes('Matching is already running') && (
+        <p role="alert">{clear.error.message}</p>
+      )}
       <p id="kind-hint">
         {kind ? (
           capabilityHints[kind]
@@ -213,11 +274,22 @@ export function Groups() {
         )}
       </p>
       {match.isError && <p role="alert">{match.error.message}</p>}
-      {query.isFetching && <p role="status">{query.isPlaceholderData ? 'Loading groups… Previous results shown until ready.' : 'Loading groups…'}</p>}
-      {query.isError && !(query.error instanceof ResultsChangedError) && !(query.error instanceof GroupCursorError) && (
-        <p role="alert">{query.error.message}</p>
+      {query.isFetching && (
+        <p role="status">
+          {query.isPlaceholderData
+            ? 'Loading groups… Previous results shown until ready.'
+            : 'Loading groups…'}
+        </p>
       )}
-      {!query.isPlaceholderData && <p>{sort === 'member_count' ? 'Members' : 'Reclaimable space'} — {direction === 'desc' ? 'highest first' : 'lowest first'}.</p>}
+      {query.isError &&
+        !(query.error instanceof ResultsChangedError) &&
+        !(query.error instanceof GroupCursorError) && <p role="alert">{query.error.message}</p>}
+      {!query.isPlaceholderData && (
+        <p>
+          {sort === 'member_count' ? 'Members' : 'Reclaimable space'} —{' '}
+          {direction === 'desc' ? 'highest first' : 'lowest first'}.
+        </p>
+      )}
       {!query.isPlaceholderData && query.data?.items.length === 0 && (
         <p>
           No duplicates for this filter. Add scan directories and run a scan, or re-run matching.

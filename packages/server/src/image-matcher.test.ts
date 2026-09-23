@@ -50,6 +50,34 @@ async function match() {
   return run;
 }
 
+it('scopes perceptual groups and memberships to selected image kinds', async () => {
+  const imageA = put(0n, 'image-a');
+  const imageB = put(63n, 'image-b');
+  put(0n, 'video-a', 'done', 1, 'video');
+  put(63n, 'video-b', 'done', 1, 'video');
+  const scanId = Number(
+    db.prepare("INSERT INTO scans(status,images,videos,audio) VALUES ('done',1,0,0)").run()
+      .lastInsertRowid
+  );
+  matcher.start(scanId);
+  await matcher.close();
+  expect(groups().map(({ kind, member_count }) => ({ kind, member_count }))).toEqual([
+    { kind: 'image', member_count: 2 },
+  ]);
+  expect(
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM dup_group_members m JOIN files f ON f.id=m.file_id
+      WHERE f.kind<>'image'`
+      )
+      .get()
+  ).toEqual({ n: 0 });
+  expect(db.prepare('SELECT file_id FROM dup_group_members ORDER BY file_id').all()).toEqual([
+    { file_id: imageA },
+    { file_id: imageB },
+  ]);
+});
+
 it.each([6, 7])('verifies the default threshold boundary at distance %i', async (distance) => {
   put(0n);
   put((1n << BigInt(distance)) - 1n);

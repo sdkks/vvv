@@ -7,6 +7,8 @@ import { matchPerceptual } from './perceptual-matcher.js';
 import { matchPartialAudio } from './partial-matcher.js';
 
 type Candidate = { size: number; sha256: string };
+type Kinds = { images: boolean; videos: boolean; audio: boolean };
+const allKinds: Kinds = { images: true, videos: true, audio: true };
 export function refreshGroup(db: Database.Database, id: number, scanDirId = 0) {
   db.prepare(
     `DELETE FROM dup_group_members AS m WHERE group_id=? AND EXISTS (
@@ -104,6 +106,8 @@ export class Matcher {
   private task?: Promise<void>;
   private queued = false;
   private logScanId?: number;
+  private queuedScanId?: number;
+  private kinds: Kinds = allKinds;
   constructor(
     private db: Database.Database,
     private log: FastifyBaseLogger,
@@ -117,11 +121,24 @@ export class Matcher {
   /** Called when a scan completes; the triggered match run logs under that scan. */
   afterScan(scanId: number) {
     this.logScanId = scanId;
-    if (this.task) this.queued = true;
-    else this.start();
+    if (this.task) {
+      this.queued = true;
+      this.queuedScanId = scanId;
+    } else this.start(scanId);
   }
-  start(): number | null {
+  start(scanId?: number): number | null {
     if (this.task) return null;
+    const selection =
+      scanId === undefined
+        ? (this.db
+            .prepare(
+              "SELECT images,videos,audio FROM scans WHERE status='done' ORDER BY id DESC LIMIT 1"
+            )
+            .get() as Kinds | undefined)
+        : (this.db.prepare('SELECT images,videos,audio FROM scans WHERE id=?').get(scanId) as
+            Kinds | undefined);
+    this.kinds = selection ?? allKinds;
+    if (scanId !== undefined) this.logScanId = scanId;
     const id = Number(
       this.db.prepare("INSERT INTO match_runs(status) VALUES ('building')").run().lastInsertRowid
     );
@@ -142,10 +159,17 @@ export class Matcher {
         this.task = undefined;
         if (this.queued) {
           this.queued = false;
-          this.start();
+          const scanId = this.queuedScanId;
+          this.queuedScanId = undefined;
+          this.start(scanId);
         }
       });
     return id;
+  }
+  clear(): boolean {
+    if (this.task || this.queued) return false;
+    this.db.transaction(() => this.db.exec('DELETE FROM dup_groups'))();
+    return true;
   }
   async close() {
     this.queued = false;
@@ -161,7 +185,7 @@ export class Matcher {
     this.log.info({ match_run: id }, 'Matching started');
     this.logs?.add(scanId, 'info', 'match', `Matching started — run ${id}`);
     const candidates = db.prepare(`SELECT size,sha256 FROM files INDEXED BY idx_files_exact
-      WHERE status='done' AND sha256 IS NOT NULL AND (size,sha256)>(?,?)
+      WHERE status='done' AND sha256 IS NOT NULL AND CASE kind WHEN 'image' THEN ? WHEN 'video' THEN ? WHEN 'audio' THEN ? ELSE 0 END=1 AND (size,sha256)>(?,?)
       GROUP BY size,sha256 HAVING count(*)>1 ORDER BY size,sha256 LIMIT 1000`);
     const group =
       db.prepare(`INSERT INTO dup_groups(kind,member_count,total_bytes,reclaimable_bytes,match_run)
@@ -169,11 +193,18 @@ export class Matcher {
     const members = db.prepare(`INSERT INTO dup_group_members(group_id,file_id)
       SELECT ?,id FROM files INDEXED BY idx_files_exact
       WHERE status='done' AND size=? AND sha256=? AND id>?
+      AND CASE kind WHEN 'image' THEN ? WHEN 'video' THEN ? WHEN 'audio' THEN ? ELSE 0 END=1
       ORDER BY id LIMIT ?`);
     let size = -1,
       hash = '';
     for (;;) {
-      const batch = candidates.all(size, hash) as Candidate[];
+      const batch = candidates.all(
+        Number(this.kinds.images),
+        Number(this.kinds.videos),
+        Number(this.kinds.audio),
+        size,
+        hash
+      ) as Candidate[];
       if (!batch.length) break;
       let index = 0,
         groupId = 0,
@@ -184,7 +215,16 @@ export class Matcher {
           while (index < batch.length && budget > 0) {
             const item = batch[index]!;
             if (!groupId) groupId = Number(group.run(id).lastInsertRowid);
-            const { changes } = members.run(groupId, item.size, item.sha256, after, budget);
+            const { changes } = members.run(
+              groupId,
+              item.size,
+              item.sha256,
+              after,
+              Number(this.kinds.images),
+              Number(this.kinds.videos),
+              Number(this.kinds.audio),
+              budget
+            );
             if (changes < budget) {
               refreshGroup(db, groupId);
               index++;
@@ -206,7 +246,13 @@ export class Matcher {
     const stats = [];
     for (const kind of ['image', 'video'] as const) {
       const kindStart = Date.now();
-      const result = await matchPerceptual(db, id, (groupId) => refreshGroup(db, groupId), kind);
+      const result = await matchPerceptual(
+        db,
+        id,
+        (groupId) => refreshGroup(db, groupId),
+        kind,
+        kind === 'image' ? this.kinds.images : this.kinds.videos
+      );
       stats.push(result);
       const kindMs = Date.now() - kindStart;
       this.log.info({ match_run: id, kind, ...result }, 'Perceptual matching finished');
@@ -219,7 +265,12 @@ export class Matcher {
       );
     }
     const audioStart = Date.now();
-    const audio = await matchPartialAudio(db, id, (groupId) => refreshGroup(db, groupId));
+    const audio = await matchPartialAudio(
+      db,
+      id,
+      (groupId) => refreshGroup(db, groupId),
+      this.kinds
+    );
     this.log.info({ match_run: id, ...audio }, 'Audio partial matching finished');
     this.logs?.add(
       scanId,

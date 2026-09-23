@@ -3,7 +3,13 @@ import { join } from 'node:path';
 import { setImmediate as yieldLoop } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { FastifyBaseLogger } from 'fastify';
-import type { FileHashAlgorithm, FileSizePolicy, ScanLogLevel, ScanLogStep, ScanProgress } from '@vvv/shared';
+import type {
+  FileHashAlgorithm,
+  FileSizePolicy,
+  ScanLogLevel,
+  ScanLogStep,
+  ScanProgress,
+} from '@vvv/shared';
 import { imageHash, imageMetadata, processFile, storeHashes } from './hashing.js';
 import { MediaWork, VideoFailure, videoHash, videoMetadata } from './video.js';
 import { audioFingerprint, storeSubfingerprints } from './audio.js';
@@ -24,6 +30,7 @@ import {
   sizeExclusion,
 } from './traversal-policy.js';
 
+export type ScanKinds = { images: boolean; videos: boolean; audio: boolean };
 type Directory = {
   id: number;
   path: string;
@@ -44,6 +51,7 @@ export class Scanner {
   private task?: Promise<void>;
   private currentFile?: string;
   private scanId = 0;
+  private kinds: ScanKinds = { images: true, videos: true, audio: true };
   private sizes: FileSizePolicy = { min_file_size_mb: 0, max_file_size_mb: 0 };
   // Audio means fingerprinting, not perceptual hashing; the switch gates the fpcalc step.
   private perceptual = { image: true, video: true, audio: true };
@@ -85,8 +93,9 @@ export class Scanner {
       detail
     );
   }
-  start(): number | null {
+  start(kinds: ScanKinds = { images: true, videos: true, audio: true }): number | null {
     if (this.task) return null;
+    this.kinds = kinds;
     // Algorithm changes clear all legacy sha256 checkpoints and are refused during scans.
     // Snapshot the algorithm so every surviving content hash uses the same algorithm.
     this.algorithm = fileHashAlgorithm(this.db);
@@ -98,7 +107,9 @@ export class Scanner {
       audio: matchingEnabled(this.db, 'audio'),
     };
     const id = Number(
-      this.db.prepare("INSERT INTO scans(status) VALUES ('running')").run().lastInsertRowid
+      this.db
+        .prepare("INSERT INTO scans(status,images,videos,audio) VALUES ('running',?,?,?)")
+        .run(Number(kinds.images), Number(kinds.videos), Number(kinds.audio)).lastInsertRowid
     );
     this.cancelled = false;
     this.abort = new AbortController();
@@ -208,6 +219,15 @@ export class Scanner {
     if (error) this.logs?.add(scan, 'error', 'error', `${join(dir.path, path)}: ${error}`);
     this.publish();
   }
+  private selected(kind: string) {
+    return kind === 'image'
+      ? this.kinds.images
+      : kind === 'video'
+        ? this.kinds.videos
+        : kind === 'audio'
+          ? this.kinds.audio
+          : true;
+  }
   private async walk(
     dir: Directory,
     relative: string,
@@ -245,6 +265,7 @@ export class Scanner {
       }
       if (linked) info = await stat(absolute, { bigint: true });
     } catch (error) {
+      if (kind && !this.selected(kind)) return;
       if (!kind && linked && isVanishedOrLoop(error)) return;
       if (!kind) throw error;
       this.record(dir, relative, kind, 0n, 0n, scan, message(error));
@@ -253,6 +274,7 @@ export class Scanner {
     root ??= info.dev;
     if (crossesBoundary(root, info.dev, dir.cross_filesystems)) return;
     if (info.isFile() && kind) {
+      if (!this.selected(kind)) return;
       this.record(dir, relative, kind, info.size, info.mtimeNs, scan, null);
     } else if (info.isDirectory()) {
       const key = `${info.dev}:${info.ino}`;
@@ -309,11 +331,19 @@ export class Scanner {
         const unseen = this.db
           .prepare(
             `SELECT id FROM files WHERE id>? AND last_seen_scan_id IS NOT ?
-            AND status NOT IN ('missing','quarantined') AND NOT EXISTS (
+            AND status NOT IN ('missing','quarantined')
+            AND CASE kind WHEN 'image' THEN ? WHEN 'video' THEN ? WHEN 'audio' THEN ? ELSE 1 END=1
+            AND NOT EXISTS (
               SELECT 1 FROM file_operations o WHERE o.file_id=files.id
               AND o.status != 'committed' AND o.status IN ('pending','fs_done')) ORDER BY id LIMIT 100`
           )
-          .all(after, id) as { id: number }[];
+          .all(
+            after,
+            id,
+            Number(this.kinds.images),
+            Number(this.kinds.videos),
+            Number(this.kinds.audio)
+          ) as { id: number }[];
         if (!unseen.length) break;
         for (const file of unseen) {
           this.db
@@ -513,9 +543,10 @@ export class Scanner {
       .prepare("UPDATE scans SET status=?,finished_at=datetime('now') WHERE id=?")
       .run(status, id);
     this.publish();
-    const totals = this.db
-      .prepare('SELECT processed,errors FROM scans WHERE id=?')
-      .get(id) as { processed: number; errors: number };
+    const totals = this.db.prepare('SELECT processed,errors FROM scans WHERE id=?').get(id) as {
+      processed: number;
+      errors: number;
+    };
     const detail =
       status === 'done'
         ? `Scan complete — ${totals.processed} processed, ${totals.errors} errors`

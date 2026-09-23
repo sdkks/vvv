@@ -41,10 +41,12 @@ it('uses authenticated JSON CRUD and accepts empty cancellation responses', asyn
     method: 'POST',
     credentials: 'same-origin',
   });
-  await startScan();
+  await startScan({ images: true, videos: false, audio: true });
   expect(fetch).toHaveBeenLastCalledWith('/api/scans', {
     method: 'POST',
     credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ images: true, videos: false, audio: true }),
   });
   await getCurrentScan(signal);
   expect(fetch).toHaveBeenLastCalledWith('/api/scans/current', {
@@ -67,7 +69,9 @@ it.each([
     'fetch',
     vi.fn().mockResolvedValue(Response.json({ error }, { status: Number(status) }))
   );
-  await expect(startScan()).rejects.toThrow(String(message));
+  await expect(startScan({ images: true, videos: true, audio: true })).rejects.toThrow(
+    String(message)
+  );
 });
 it('uses current-scan resync to recover an SSE auth failure through the existing return-location flow', async () => {
   const replace = vi.fn();
