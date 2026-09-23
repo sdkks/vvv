@@ -242,7 +242,7 @@ it.skipIf(!hasFpcalc)(
     const survivorDetail = (await request(`/api/groups/${survivors[0]!.id}`)).json<GroupResponse>();
     expect(
       survivorDetail.members.items.map((member) => member.file_id).sort((x, y) => x - y)
-    ).toEqual([midId, sourceId]);
+    ).toEqual([midId, sourceId].sort((x, y) => x - y));
     expect((await request(`/api/groups/${clipInMid.id}`)).statusCode).toBe(404);
     expect((await request(`/api/groups/${clipInSource.id}`)).statusCode).toBe(404);
     expect((await request('/api/trash')).statusCode).toBe(200);
