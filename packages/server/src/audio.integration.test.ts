@@ -161,10 +161,13 @@ it.skipIf(!hasFpcalc)(
         kind: 'audio',
         status: 'done',
         error: null,
-        duration_ms: 3000,
+        duration_ms: expect.any(Number),
         subfingerprints: expect.any(Number),
       }),
     ]);
+    // Allow encoder delay/frame padding: roughly two MP3 frames (52ms at 44.1kHz).
+    expect(rows[2]!.duration_ms).toBeGreaterThanOrEqual(3000);
+    expect(rows[2]!.duration_ms).toBeLessThanOrEqual(3060);
     expect(rows[1]!.subfingerprints).toBeGreaterThan(0);
     expect(rows[2]!.subfingerprints).toBeGreaterThan(0);
     // Stored subfingerprints equal a direct fpcalc run for the same file.
