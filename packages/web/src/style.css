@@ -1,7 +1,7 @@
 :root {
   font-family: system-ui, sans-serif;
   color: #182230;
-  background: #f3f5f7;
+  background: #f1f4f8;
   line-height: 1.5;
 }
 * {
@@ -10,12 +10,97 @@
 body {
   margin: 0;
 }
-main {
+.standalone-surface,
+.content-surface {
+  min-width: 0;
   max-width: 56rem;
-  margin: 3rem auto;
   padding: 2rem;
   background: white;
   border-radius: 0.5rem;
+}
+.standalone-surface {
+  margin: 3rem auto;
+}
+.app-shell {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: 1.5rem;
+  max-width: 74rem;
+  margin: 2rem auto;
+  padding-inline: 1rem;
+  align-items: start;
+}
+.shell-sidebar {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background: #e7edf5;
+}
+.shell-sidebar header {
+  margin: 0.5rem 0.75rem 1.5rem;
+  font-weight: 700;
+}
+.shell-nav {
+  display: grid;
+  gap: 0.5rem;
+}
+.shell-nav a {
+  display: block;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  border-left: 4px solid transparent;
+  border-radius: 0.25rem;
+  text-decoration: none;
+}
+.shell-nav a:hover {
+  background: #f1f4f8;
+  text-decoration: underline;
+}
+.shell-nav a[aria-current='page'] {
+  background: #dbe7f5;
+  border-left-color: #194b88;
+  font-weight: 700;
+}
+.shell-nav[hidden],
+.shell-menu[hidden] {
+  display: none;
+}
+.app-shell[data-layout='narrow'] {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 0.75rem;
+}
+.app-shell[data-layout='narrow'] .shell-sidebar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+}
+.app-shell[data-layout='narrow'] .shell-sidebar header {
+  margin: 0;
+}
+.app-shell[data-layout='narrow'] .shell-nav {
+  grid-column: 1 / -1;
+}
+.app-shell[data-layout='narrow'] .content-surface {
+  padding: 1rem;
+}
+.home-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+}
+.home-instructions {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.home-illustration {
+  width: 22rem;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
 }
 form {
   display: grid;
@@ -512,7 +597,7 @@ summary {
     content: attr(data-label) ': ';
     font-weight: 600;
   }
-  main {
+  .standalone-surface {
     margin: 0;
     padding: 1rem;
   }

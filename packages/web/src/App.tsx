@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { FormEvent, MouseEvent } from 'react';
 import { NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, SessionResponse } from '@vvv/shared';
@@ -85,15 +85,72 @@ function Login() {
 }
 
 function Shell() {
+  const [media] = useState(() => window.matchMedia('(max-width: 60rem)'));
+  const [narrow, setNarrow] = useState(media.matches);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const nav = useRef<HTMLElement>(null);
+  const menu = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLElement>(null);
+  const restoreNavFocus = useRef(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    function resize(event: MediaQueryListEvent) {
+      setMenuOpen(event.matches && Boolean(nav.current?.contains(document.activeElement)));
+      restoreNavFocus.current = !event.matches && document.activeElement === menu.current;
+      setNarrow(event.matches);
+    }
+    media.addEventListener('change', resize);
+    return () => media.removeEventListener('change', resize);
+  }, [media]);
+
+  useEffect(() => {
+    if (!narrow && restoreNavFocus.current) {
+      const link =
+        nav.current?.querySelector<HTMLAnchorElement>('a[aria-current="page"]') ??
+        nav.current?.querySelector<HTMLAnchorElement>('a');
+      link?.focus();
+    }
+    restoreNavFocus.current = false;
+  }, [narrow]);
+
+  useEffect(() => {
+    if (media.matches && nav.current?.contains(document.activeElement)) content.current?.focus();
+    setMenuOpen(false);
+  }, [location.key, media]);
+
+  function selectDestination(event: MouseEvent<HTMLElement>) {
+    const link = event.target instanceof Element ? event.target.closest('a') : null;
+    if (
+      !narrow ||
+      !link ||
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.shiftKey ||
+      (link.target && link.target !== '_self')
+    )
+      return;
+    if (nav.current?.contains(document.activeElement)) content.current?.focus();
+    setMenuOpen(false);
+  }
+
   const session = useQuery({
     queryKey: ['session'],
     queryFn: () => api<SessionResponse>('/auth/session'),
     retry: false,
   });
-  if (session.isPending) return <p role="status">Checking session…</p>;
+  if (session.isPending)
+    return (
+      <main className="standalone-surface">
+        <p role="status">Checking session…</p>
+      </main>
+    );
   if (session.isError)
     return (
-      <>
+      <main className="standalone-surface">
         <p role="alert">{session.error.message}</p>
         <button
           onClick={() => {
@@ -102,50 +159,91 @@ function Shell() {
         >
           Retry
         </button>
-      </>
+      </main>
     );
   return (
-    <>
-      <header>VVV — Veni Vidi Video</header>
-      <nav className="toolbar" aria-label="Main navigation">
-        <NavLink to="/">Home</NavLink>
-        <NavLink to="/directories">Directories</NavLink>
-        <NavLink to="/scan">Scan</NavLink>
-        <NavLink to="/logs">Logs</NavLink>
-        <NavLink to="/groups">Groups</NavLink>
-        <NavLink to="/trash">Trash</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
-      </nav>
-      <Outlet />
-    </>
+    <div className="app-shell" data-layout={narrow ? 'narrow' : 'desktop'}>
+      <div className="shell-sidebar">
+        <header>VVV — Veni Vidi Video</header>
+        <button
+          ref={menu}
+          className="shell-menu"
+          type="button"
+          hidden={!narrow}
+          aria-expanded={menuOpen}
+          aria-controls="main-navigation"
+          onClick={(event) => {
+            event.currentTarget.focus();
+            setMenuOpen((open) => !open);
+          }}
+        >
+          Menu
+        </button>
+        <nav
+          ref={nav}
+          id="main-navigation"
+          className="shell-nav"
+          aria-label="Main navigation"
+          hidden={narrow && !menuOpen}
+          onClickCapture={selectDestination}
+        >
+          <NavLink to="/" end>
+            Home
+          </NavLink>
+          <NavLink to="/directories">Directories</NavLink>
+          <NavLink to="/scan">Scan</NavLink>
+          <NavLink to="/logs">Logs</NavLink>
+          <NavLink to="/groups">Groups</NavLink>
+          <NavLink to="/trash">Trash</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
+        </nav>
+      </div>
+      <main ref={content} id="content" className="content-surface" tabIndex={-1}>
+        <Outlet />
+      </main>
+    </div>
   );
 }
 
 function Home() {
   return (
-    <>
-      <PageHeading>Home</PageHeading>
-      <p>Add directories, scan your media, then review duplicate groups.</p>
-      <NavLink to="/directories">Set up scan directories</NavLink>
-    </>
+    <div className="home-intro">
+      <div className="home-instructions">
+        <PageHeading>Home</PageHeading>
+        <p>Add directories, scan your media, then review duplicate groups.</p>
+        <NavLink to="/directories">Set up scan directories</NavLink>
+      </div>
+      <img
+        className="home-illustration"
+        src="/home-duplicates.svg"
+        alt=""
+        width="352"
+        height="256"
+      />
+    </div>
   );
 }
 
 export function App() {
   return (
-    <main>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<Shell />}>
-          <Route path="/groups/:id?" element={<Groups />} />
-          <Route path="/directories" element={<Directories />} />
-          <Route path="/scan" element={<Scan />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/trash" element={<Trash />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Home />} />
-        </Route>
-      </Routes>
-    </main>
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          <main className="standalone-surface">
+            <Login />
+          </main>
+        }
+      />
+      <Route element={<Shell />}>
+        <Route path="/groups/:id?" element={<Groups />} />
+        <Route path="/directories" element={<Directories />} />
+        <Route path="/scan" element={<Scan />} />
+        <Route path="/logs" element={<Logs />} />
+        <Route path="/trash" element={<Trash />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="*" element={<Home />} />
+      </Route>
+    </Routes>
   );
 }
