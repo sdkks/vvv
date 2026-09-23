@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type {
   DuplicateGroup,
   GroupKind,
+  GroupSort,
+  SortDirection,
   GroupListItem,
   GroupMember,
   GroupResponse,
@@ -19,18 +21,27 @@ const pageProperties = {
   limit: { type: 'string', pattern: '^[1-9][0-9]{0,8}$' },
   cursor: { type: 'string', maxLength: 300 },
 };
-type Query = { kind?: GroupKind; cursor?: string; limit?: string };
+type Query = {
+  kind?: GroupKind;
+  sort?: GroupSort;
+  direction?: SortDirection;
+  cursor?: string;
+  limit?: string;
+};
+type Cursor = [number, string, GroupSort, SortDirection, number, number];
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-function decode(value: string): [number, string, number, number] | null {
+function decode(value: string): Cursor | null {
   try {
     const row: unknown = JSON.parse(Buffer.from(value, 'base64url').toString());
     if (
       Array.isArray(row) &&
-      row.length === 4 &&
+      row.length === 6 &&
       ['*', 'exact', 'image', 'video', 'audio_partial'].includes(row[1]) &&
-      [0, 2, 3].every((i) => Number.isSafeInteger(row[i]) && row[i] >= 0)
+      ['reclaimable_bytes', 'member_count'].includes(row[2]) &&
+      ['desc', 'asc'].includes(row[3]) &&
+      [0, 4, 5].every((i) => Number.isSafeInteger(row[i]) && row[i] >= 0)
     )
-      return row as [number, string, number, number];
+      return row as Cursor;
   } catch {
     /* Invalid cursors are rejected, never interpreted as a first page. */
   }
@@ -53,29 +64,39 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
           properties: {
             ...pageProperties,
             kind: { type: 'string', enum: ['exact', 'image', 'video', 'audio_partial'] },
+            sort: { type: 'string', enum: ['reclaimable_bytes', 'member_count'] },
+            direction: { type: 'string', enum: ['desc', 'asc'] },
           },
         },
       },
     },
     async (request, reply) => {
-      const { kind, cursor } = request.query;
+      const { kind, cursor, sort = 'reclaimable_bytes', direction = 'desc' } = request.query;
       const limit = Math.min(Number(request.query.limit ?? 50), 500);
       const run = activeMatchRun(db);
       const position = cursor ? decode(cursor) : null;
-      if (cursor && (!position || position[1] !== (kind ?? '*')))
+      if (
+        cursor &&
+        (!position || position[1] !== (kind ?? '*') || position[2] !== sort || position[3] !== direction)
+      )
         return reply.code(400).send({ error: 'invalid_cursor' });
       if (position && position[0] !== run)
         return reply
           .code(409)
           .send({ error: 'stale_cursor', match_run: run } satisfies StaleCursorResponse);
-      const base = `SELECT ${fields} FROM dup_groups INDEXED BY ${kind ? 'idx_groups_page_kind' : 'idx_groups_page_all'} WHERE match_run=?${kind ? ' AND kind=?' : ''}`;
+      const column = sort === 'member_count' ? 'member_count' : 'reclaimable_bytes';
+      const index = sort === 'member_count' ? 'idx_groups_members' : 'idx_groups_page';
+      const descending = direction === 'desc';
+      const base = `SELECT ${fields} FROM dup_groups INDEXED BY ${index}_${kind ? 'kind' : 'all'} WHERE match_run=?${kind ? ' AND kind=?' : ''}`;
       const args = kind ? [run, kind] : [run];
+      // Separate tied-value and next-value seeks keep both branches index-bounded.
+      // Reversing both order terms lets ascending pages use the same index.
       const sql = position
-        ? `${base} AND reclaimable_bytes=? AND id>? UNION ALL ${base} AND reclaimable_bytes<?`
+        ? `${base} AND ${column}=? AND id${descending ? '>' : '<'}? UNION ALL ${base} AND ${column}${descending ? '<' : '>'}?`
         : base;
-      const values = position ? [...args, position[2], position[3], ...args, position[2]] : args;
+      const values = position ? [...args, position[4], position[5], ...args, position[4]] : args;
       const rows = db
-        .prepare(`${sql} ORDER BY reclaimable_bytes DESC,id LIMIT ?`)
+        .prepare(`${sql} ORDER BY ${column} ${descending ? 'DESC,id ASC' : 'ASC,id DESC'} LIMIT ?`)
         .all(...values, limit + 1) as DuplicateGroup[];
       const page = rows.slice(0, limit);
       // Look up only this page, stopping at the first eligible member in file-id order.
@@ -107,7 +128,7 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
         items,
         next_cursor:
           rows.length > limit && last
-            ? encode([run, kind ?? '*', last.reclaimable_bytes, last.id])
+            ? encode([run, kind ?? '*', sort, direction, last[sort], last.id])
             : null,
       } satisfies GroupsResponse;
     }

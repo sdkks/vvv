@@ -103,6 +103,8 @@ export interface ScanErrorsResponse {
   next_cursor: string | null;
 }
 export type GroupKind = 'exact' | 'image' | 'video' | 'audio_partial';
+export type GroupSort = 'reclaimable_bytes' | 'member_count';
+export type SortDirection = 'desc' | 'asc';
 export interface StartMatchResponse {
   match_run: number;
 }

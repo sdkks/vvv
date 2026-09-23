@@ -1,11 +1,20 @@
-import type { DuplicateGroup, GroupMember } from '@vvv/shared';
+import type { DuplicateGroup, GroupMember, GroupSort, SortDirection } from '@vvv/shared';
 import type { QueryClient } from '@tanstack/react-query';
 import { getGroups, GroupMissingError, ResultsChangedError, type KindFilter } from './api';
 
 // Members omit kind; mirror the scanner's extension-based video classification.
 export const isVideo = (path: string) =>
   /\.(mp4|mkv|avi|mov|webm|m4v|mpg|mpeg|ts|m2ts|wmv|flv)$/i.test(path);
-export const groupsKey = (kind: KindFilter, cursor = '') => ['groups', 'list', kind, cursor];
+export const groupsKey = (
+  kind: KindFilter,
+  cursor = '',
+  sort: GroupSort = 'reclaimable_bytes',
+  direction: SortDirection = 'desc'
+) => ['groups', 'list', kind, cursor, sort, direction];
+export const groupSort = (value: string | null): GroupSort =>
+  value === 'member_count' ? 'member_count' : 'reclaimable_bytes';
+export const sortDirection = (value: string | null): SortDirection =>
+  value === 'asc' ? 'asc' : 'desc';
 export function kindFilter(value: string | null): KindFilter {
   return value === 'exact' || value === 'image' || value === 'video' || value === 'audio_partial'
     ? value
@@ -21,13 +30,19 @@ export function visitCursor(history: string[], current: string, next: string) {
 export function previousCursor(history: string[], current: string) {
   return history[history.indexOf(current) - 1];
 }
-export async function recoverGroups(cache: QueryClient, kind: KindFilter, restart: () => void) {
+export async function recoverGroups(
+  cache: QueryClient,
+  kind: KindFilter,
+  restart: () => void,
+  sort: GroupSort = 'reclaimable_bytes',
+  direction: SortDirection = 'desc'
+) {
   await cache.cancelQueries({ queryKey: ['groups'] });
   cache.removeQueries({ queryKey: ['groups'] });
   restart();
   await cache.fetchQuery({
-    queryKey: groupsKey(kind),
-    queryFn: ({ signal }) => getGroups(kind, '', signal),
+    queryKey: groupsKey(kind, '', sort, direction),
+    queryFn: ({ signal }) => getGroups(kind, '', signal, sort, direction),
     retry: false,
   });
 }

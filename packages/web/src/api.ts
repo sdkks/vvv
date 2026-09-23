@@ -1,6 +1,8 @@
 import type {
   LoginRequest,
   GroupKind,
+  GroupSort,
+  SortDirection,
   GroupResponse,
   GroupsResponse,
   StartMatchResponse,
@@ -40,6 +42,12 @@ export class ResultsChangedError extends Error {
 
 export class GroupMissingError extends ResultsChangedError {}
 
+export class GroupCursorError extends Error {
+  constructor() {
+    super('This groups page is no longer valid. Showing the first page.');
+  }
+}
+
 export function returnLocation(search: string, origin: string) {
   const target = new URLSearchParams(search).get('returnTo') ?? '/';
   try {
@@ -68,6 +76,8 @@ async function request(path: string, init?: RequestInit) {
     const code = body && typeof body === 'object' && 'error' in body ? body.error : null;
     if (response.status === 404 && code === 'group_not_found') throw new GroupMissingError();
     if (response.status === 409 && code === 'stale_cursor') throw new ResultsChangedError();
+    if (response.status === 400 && code === 'invalid_cursor' && path.split('?')[0] === '/groups')
+      throw new GroupCursorError();
     if (response.status === 404 && code === 'thumbnail_not_found')
       throw new ThumbnailUnavailableError('No thumbnail available');
     if (code === 'invalid_settings' && body && typeof body === 'object' && 'fields' in body) {
@@ -114,14 +124,26 @@ export const getThumbnail = (id: number, signal: AbortSignal) =>
   request(`/files/${id}/thumb`, { signal }).then((response) => response.blob());
 
 export type KindFilter = GroupKind | '';
-export function groupsSearch(kind: KindFilter, cursor = '') {
+export function groupsSearch(
+  kind: KindFilter,
+  cursor = '',
+  sort: GroupSort = 'reclaimable_bytes',
+  direction: SortDirection = 'desc'
+) {
   const query = new URLSearchParams();
   if (kind) query.set('kind', kind);
   if (cursor) query.set('cursor', cursor);
+  if (sort !== 'reclaimable_bytes') query.set('sort', sort);
+  if (direction !== 'desc') query.set('direction', direction);
   return query.size ? `?${query}` : '';
 }
-export const getGroups = (kind: KindFilter, cursor = '', signal?: AbortSignal) =>
-  api<GroupsResponse>(`/groups${groupsSearch(kind, cursor)}`, { signal });
+export const getGroups = (
+  kind: KindFilter,
+  cursor = '',
+  signal?: AbortSignal,
+  sort: GroupSort = 'reclaimable_bytes',
+  direction: SortDirection = 'desc'
+) => api<GroupsResponse>(`/groups${groupsSearch(kind, cursor, sort, direction)}`, { signal });
 export const getGroup = (id: string, cursor = '', signal?: AbortSignal) =>
   api<GroupResponse>(`/groups/${encodeURIComponent(id)}${groupsSearch('', cursor)}`, { signal });
 export const runMatching = () => api<StartMatchResponse>('/matches/run', { method: 'POST' });

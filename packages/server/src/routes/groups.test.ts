@@ -102,6 +102,11 @@ it('returns empty initial results, missing-group 404s, and validates ids, limits
   expect((await get('/api/groups/1')).statusCode).toBe(404);
   for (const url of [
     '/api/groups?kind=unknown',
+    '/api/groups?sort=total_bytes',
+    '/api/groups?sort=member_count%3BDROP%20TABLE%20dup_groups',
+    '/api/groups?direction=sideways',
+    '/api/groups?direction=',
+    '/api/groups?sort=member_count&sort=reclaimable_bytes',
     '/api/groups?limit=0',
     '/api/groups?limit=-1',
     '/api/groups?limit=1.5',
@@ -125,6 +130,12 @@ it('returns empty initial results, missing-group 404s, and validates ids, limits
     [1, '*', 0, 1.5],
     [1, 'other', 0, 1],
     [1, '*', 0, 1, 2],
+    [1, '*', 'member_count', 'desc', -1, 1],
+    [1, '*', 'member_count', 'asc', 3, 1.5],
+    [1, 'other', 'member_count', 'desc', 3, 1],
+    [1, '*', 'total_bytes', 'desc', 3, 1],
+    [1, '*', 'member_count', 'sideways', 3, 1],
+    [1, '*', 'member_count', 'desc', '3', 1],
   ]) {
     const cursor = Buffer.from(JSON.stringify(value)).toString('base64url');
     expect((await get(`/api/groups?cursor=${cursor}`)).statusCode).toBe(400);
@@ -179,6 +190,91 @@ it('paginates ties and lower sizes deterministically and identically using both 
   expect(await pages('image')).toEqual([{ ...all[1], kind: 'image' }]);
   expect((await pages()).map(({ id }) => id)).toEqual(all.map(({ id }) => id));
 });
+
+it('pages both sort keys in both directions over live curl, including 60 tied groups per kind and indexed seeks', async () => {
+  db.transaction(() => {
+    for (let i = 0; i < 132; i++) {
+      const count = i < 120 ? 3 : 2 + (i % 4);
+      for (let j = 0; j < count; j++) put(`${i}-${j}.jpg`, (i % 7) * 10, `hash-${i}`);
+    }
+  })();
+  const run = await match();
+  db.exec("UPDATE dup_groups SET kind='image' WHERE id%2=0");
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const exec = promisify(execFile);
+  const curl = async (query: URLSearchParams, authenticated = true) => {
+    const { stdout } = await exec('curl', [
+      '--silent', '--show-error', '--fail-with-body',
+      ...(authenticated ? ['-H', `Cookie: ${cookie}`] : []),
+      `${address}/api/groups?${query}`,
+    ]);
+    return JSON.parse(stdout) as GroupsResponse;
+  };
+  const prepare = vi.spyOn(Database.prototype, 'prepare');
+  for (const sort of ['reclaimable_bytes', 'member_count'] as const) {
+    for (const direction of ['desc', 'asc'] as const) {
+      for (const kind of ['', 'exact'] as const) {
+        const query = new URLSearchParams({ sort, direction, limit: '17' });
+        if (kind) query.set('kind', kind);
+        const items: DuplicateGroup[] = [];
+        let firstCursor = '';
+        for (;;) {
+          const page = await curl(query);
+          items.push(...page.items);
+          expect(items.length).toBeLessThanOrEqual(132);
+          if (!page.next_cursor) break;
+          firstCursor ||= page.next_cursor;
+          query.set('cursor', page.next_cursor);
+        }
+        const expected = db.prepare(
+          `SELECT id FROM dup_groups ${kind ? "WHERE kind='exact'" : ''} ORDER BY ${sort} ${direction},id ${direction === 'desc' ? 'ASC' : 'DESC'}`
+        ).all();
+        expect(items.map(({ id }) => ({ id }))).toEqual(expected);
+        expect(items).toHaveLength(kind ? 66 : 132);
+        expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);
+        query.set('cursor', firstCursor);
+        expect(JSON.parse(Buffer.from(firstCursor, 'base64url').toString()).slice(0, 4))
+          .toEqual([run, kind || '*', sort, direction]);
+        for (const [key, value] of [
+          ['sort', sort === 'member_count' ? 'reclaimable_bytes' : 'member_count'],
+          ['direction', direction === 'desc' ? 'asc' : 'desc'],
+          ['kind', kind ? 'image' : 'exact'],
+        ]) {
+          const mismatch = new URLSearchParams(query);
+          mismatch.set(key!, value!);
+          const response = await get(`/api/groups?${mismatch}`);
+          expect(response.statusCode).toBe(400);
+          expect(response.json()).toEqual({ error: 'invalid_cursor' });
+        }
+        expect((await app.inject({ url: `/api/groups?${query}` })).statusCode).toBe(401);
+      }
+    }
+  }
+  const sqls = [...new Set(prepare.mock.calls.map(([sql]) => sql)
+    .filter((sql) => sql.includes('FROM dup_groups INDEXED BY')))];
+  prepare.mockRestore();
+  expect(sqls).toHaveLength(16); // First-page and seek queries for every key/kind/direction.
+  for (const sql of sqls) {
+    const kind = sql.includes('_kind');
+    const args = kind ? [run, 'exact'] : [run];
+    const bindings = sql.includes('UNION ALL') ? [...args, 3, 50, ...args, 3, 18] : [...args, 18];
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings) as { detail: string }[];
+    expect(plan.some(({ detail }) => detail.includes('TEMP B-TREE') || detail.startsWith('SCAN '))).toBe(false);
+    const searches = plan.filter(({ detail }) => detail.startsWith('SEARCH dup_groups'));
+    expect(searches).toHaveLength(sql.includes('UNION ALL') ? 2 : 1);
+    const index = `idx_groups_${sql.includes('ORDER BY member_count') ? 'members' : 'page'}_${kind ? 'kind' : 'all'}`;
+    expect(searches.every(({ detail }) => detail.includes(index))).toBe(true);
+    if (sql.includes('UNION ALL')) {
+      expect(searches[0]!.detail).toMatch(/(?:member_count|reclaimable_bytes)=\? AND id[<>]\?/);
+      expect(searches[1]!.detail).toMatch(/(?:member_count|reclaimable_bytes)[<>]\?/);
+    }
+  }
+  const sorted = (await get('/api/groups?sort=member_count&direction=asc&limit=1')).json<GroupsResponse>();
+  const newRun = await match();
+  const stale = await get(`/api/groups?sort=member_count&direction=asc&cursor=${sorted.next_cursor}`);
+  expect(stale.statusCode).toBe(409);
+  expect(stale.json()).toEqual({ error: 'stale_cursor', match_run: newRun });
+}, 30000);
 
 it('selects the lowest done visual member, never audio, unavailable files, or a quality winner', async () => {
   const audio = put('sound.wav');

@@ -8,6 +8,7 @@ import { quarantineMigration } from './migrations/005-quarantine.js';
 import { sizeFiltersMigration } from './migrations/006-size-filters.js';
 import { audioFingerprintsMigration } from './migrations/007-audio-fingerprints.js';
 import { audioPartialMigration } from './migrations/008-partial-audio.js';
+import { groupSortingMigration } from './migrations/009-group-sorting.js';
 
 const migrations = [
   'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -19,6 +20,7 @@ const migrations = [
   sizeFiltersMigration,
   audioFingerprintsMigration,
   audioPartialMigration,
+  groupSortingMigration,
 ];
 export function openDatabase(dataDir: string) {
   const path = join(dataDir, 'vvv.db');
