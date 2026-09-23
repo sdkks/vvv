@@ -4,7 +4,7 @@ services:
     image: localhost/vvv:latest
     ports:
       # Host port is configurable; 8080 is the in-container port.
-      - '${VVV_PORT:-8080}:8080'
+      - '${VVV_PORT:-8081}:8080'
     environment:
       # Demo default for quick local trials — set a strong unique value for real use.
       VVV_PASSWORD: ${VVV_PASSWORD:-vvv-demo}
@@ -13,7 +13,7 @@ services:
       # Set MEDIA_DIR to a directory reachable from the podman host/VM.
       # Default mount is read-only; set MEDIA_MOUNT_MODE=rw to allow quarantining
       # media into .vvv-trash/ (needed to test the full delete loop).
-      - ${MEDIA_DIR:-./media}:/media:${MEDIA_MOUNT_MODE:-ro}
+      - ${MEDIA_DIR:-./tests/fixtures/data/}:/media:${MEDIA_MOUNT_MODE:-ro}
     restart: unless-stopped
     healthcheck:
       test:
