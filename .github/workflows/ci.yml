@@ -24,6 +24,8 @@ jobs:
   ci:
     name: Test gate
     runs-on: ubuntu-24.04
+    outputs:
+      publish_runtime: ${{ steps.classify.outputs.publish_runtime }}
     steps:
       - name: Check out full history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -45,11 +47,29 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Run all CI checks
         run: make ci
+      - name: Classify pushed commits
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          publish_runtime=true
+          if [[ "$EVENT_NAME" == push && "$REF" == refs/heads/main ]]; then
+            if classified=$(jq -er '
+              [.commits[]?.message | split("\\n")[0]] as $subjects |
+              (($subjects | length) > 0) and
+              all($subjects[]; test("^(docs|chore|test)(\\([^)]*\\))?!?:"))
+            ' "$EVENT_PATH" 2>/dev/null) && [[ "$classified" == true ]]; then
+              publish_runtime=false
+            fi
+          fi
+          printf 'publish_runtime=%s\n' "$publish_runtime" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and push (${{ matrix.arch }})
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci.outputs.publish_runtime == 'true'
     permissions:
       contents: read
       packages: write
@@ -90,7 +110,7 @@ jobs:
   publish:
     name: Publish multi-architecture latest
     needs: [ci, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci.outputs.publish_runtime == 'true' && needs.ci.result == 'success' && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       packages: write
