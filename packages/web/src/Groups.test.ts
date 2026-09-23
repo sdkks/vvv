@@ -4,11 +4,14 @@ import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it } from 'vitest';
 import { Groups } from './Groups';
+import type { GroupsResponse } from '@vvv/shared';
+import { groupsKey, kindFilter } from './group-review';
 
-function render(kind: string) {
+function render(kind: string, data?: GroupsResponse) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   });
+  if (data) client.setQueryData(groupsKey(kindFilter(kind), ''), data);
   const html = renderToStaticMarkup(
     createElement(
       QueryClientProvider,
@@ -46,6 +49,42 @@ it.each([
   expect(html.match(/id="kind-hint"/g)).toHaveLength(1);
   expect(html.indexOf('id="kind-hint"')).toBeGreaterThan(html.indexOf('</select>'));
   expect(html).not.toContain('Different match types find different kinds of duplicates.');
+});
+
+it('keeps preview first and existing kind, count, bytes, and row destinations intact', () => {
+  const html = render('image', {
+    items: [
+      {
+        id: 9,
+        kind: 'image',
+        member_count: 2,
+        total_bytes: 2048,
+        reclaimable_bytes: 1024,
+        representative: { file_id: 42, kind: 'image' },
+      },
+      {
+        id: 10,
+        kind: 'audio_partial',
+        member_count: 3,
+        total_bytes: 1024,
+        reclaimable_bytes: 512,
+        representative: null,
+      },
+    ],
+    next_cursor: null,
+  });
+  expect(html).toContain('href="/groups/9?kind=image"');
+  expect(html).toContain(
+    '<span class="group-preview thumbnail fallback">Loading…</span><span class="group-summary">'
+  );
+  expect(html).toContain(
+    '<span class="group-preview thumbnail fallback">No preview</span><span class="group-summary">'
+  );
+  expect(html).toContain('<span class="group-kind">image</span> Group 9');
+  expect(html).toContain('2 members · 2 KiB total');
+  expect(html).toContain('1 KiB reclaimable');
+  expect(html).toContain('3 members · 1 KiB total');
+  expect(html).not.toContain('<img');
 });
 
 it.each(['', 'unknown'])('points the all-kinds filter (%s) to Settings', (kind) => {

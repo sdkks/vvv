@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import type {
   DuplicateGroup,
   GroupKind,
+  GroupListItem,
   GroupMember,
   GroupResponse,
   GroupsResponse,
@@ -76,8 +77,32 @@ export function groupRoutes(app: FastifyInstance, db: Database.Database, matcher
       const rows = db
         .prepare(`${sql} ORDER BY reclaimable_bytes DESC,id LIMIT ?`)
         .all(...values, limit + 1) as DuplicateGroup[];
-      const items = rows.slice(0, limit),
-        last = items.at(-1);
+      const page = rows.slice(0, limit);
+      // Look up only this page, stopping at the first eligible member in file-id order.
+      const representatives = page.length
+        ? (db
+            .prepare(
+              `SELECT g.id AS group_id,f.id AS file_id,f.kind FROM dup_groups g
+              JOIN files f ON f.id=(
+                SELECT m.file_id FROM dup_group_members m JOIN files v ON v.id=m.file_id
+                WHERE m.group_id=g.id AND v.status='done' AND v.kind IN ('image','video')
+                ORDER BY m.file_id LIMIT 1
+              ) WHERE g.id IN (${page.map(() => '?').join(',')})`
+            )
+            .all(...page.map((group) => group.id)) as {
+            group_id: number;
+            file_id: number;
+            kind: 'image' | 'video';
+          }[])
+        : [];
+      const byGroup = new Map(
+        representatives.map(({ group_id, ...representative }) => [group_id, representative])
+      );
+      const items: GroupListItem[] = page.map((group) => ({
+        ...group,
+        representative: byGroup.get(group.id) ?? null,
+      }));
+      const last = items.at(-1);
       return {
         items,
         next_cursor:

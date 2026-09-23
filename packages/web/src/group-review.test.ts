@@ -53,6 +53,7 @@ const groups = (...ids: number[]) =>
     member_count: 2,
     total_bytes: 10,
     reclaimable_bytes: 5,
+    representative: null,
   }));
 
 async function applyAtBoundary(

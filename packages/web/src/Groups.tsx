@@ -14,6 +14,7 @@ import {
   visitCursor,
 } from './group-review';
 import { GroupDetail } from './GroupDetail';
+import { GroupPreview } from './GroupPreview';
 
 const capabilityHints = {
   exact: "Same file bytes only; re-encoded or resized copies won't match.",
@@ -205,7 +206,11 @@ export function Groups() {
         {query.data?.items.map((group) => (
           <li key={group.id}>
             <Link to={`/groups/${group.id}${groupsSearch(kind, cursor)}`}>
-              <span>
+              <GroupPreview
+                key={group.representative?.file_id ?? 'empty'}
+                representative={group.representative}
+              />
+              <span className="group-summary">
                 <span className="group-kind">{group.kind}</span> Group {group.id}
                 <span className="metadata">
                   {group.member_count} members · {formatBytes(group.total_bytes)} total

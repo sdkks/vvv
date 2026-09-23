@@ -126,10 +126,9 @@ a {
   padding: 0;
 }
 .groups-list a {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem 1rem;
   padding: 0.8rem;
   border-bottom: 1px solid #c5ced9;
@@ -140,6 +139,23 @@ a {
 }
 .groups-list .metadata {
   display: block;
+}
+.group-summary,
+.groups-list .reclaimable {
+  overflow-wrap: anywhere;
+}
+.group-preview.thumbnail {
+  width: 56px;
+  height: 56px;
+  color: #475569;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.group-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .group-kind {
   font-weight: 600;
@@ -430,6 +446,16 @@ summary {
   border: 0;
 }
 @media (max-width: 600px) {
+  .groups-list a {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .group-preview.thumbnail {
+    width: 48px;
+    height: 48px;
+  }
+  .groups-list .reclaimable {
+    grid-column: 2;
+  }
   .directory-picker {
     width: calc(100vw - 1rem);
     max-height: calc(100dvh - 1rem);

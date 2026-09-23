@@ -135,7 +135,10 @@ export interface GroupMember {
   /** Seconds into the superset where the subset begins; audio_partial groups only. */
   offset_seconds?: number | null;
 }
-export type GroupsResponse = Page<DuplicateGroup>;
+export interface GroupListItem extends DuplicateGroup {
+  representative: { file_id: number; kind: 'image' | 'video' } | null;
+}
+export type GroupsResponse = Page<GroupListItem>;
 export interface GroupResponse extends DuplicateGroup {
   members: Page<GroupMember>;
 }

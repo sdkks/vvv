@@ -180,6 +180,86 @@ it('paginates ties and lower sizes deterministically and identically using both 
   expect((await pages()).map(({ id }) => id)).toEqual(all.map(({ id }) => id));
 });
 
+it('selects the lowest done visual member, never audio, unavailable files, or a quality winner', async () => {
+  const audio = put('sound.wav');
+  const missing = put('missing.jpg');
+  const pending = put('pending.jpg');
+  const video = put('first.mp4');
+  const image = put('larger.jpg');
+  const audioOnly = [put('a.wav', 20, 'audio'), put('b.wav', 20, 'audio')];
+  const imageFirst = put('first.jpg', 30, 'visual');
+  const videoLater = put('later.mp4', 30, 'visual');
+  await match();
+  db.prepare("UPDATE files SET kind='audio' WHERE id IN (?,?,?)").run(audio, ...audioOnly);
+  db.prepare("UPDATE files SET status='missing' WHERE id=?").run(missing);
+  db.prepare("UPDATE files SET status='pending' WHERE id=?").run(pending);
+  db.prepare("UPDATE files SET kind='video' WHERE id IN (?,?)").run(video, videoLater);
+  db.prepare('UPDATE files SET width=4096,height=2160,size=9999 WHERE id=?').run(image);
+  const response = await get('/api/groups');
+  expect(response.statusCode).toBe(200);
+  const groups = response.json<GroupsResponse>().items;
+  const mixed = groups.find((group) => group.member_count === 5)!;
+  expect(mixed.representative).toEqual({ file_id: video, kind: 'video' });
+  expect(groups.find((group) => group.total_bytes === 40)?.representative).toBeNull();
+  expect(groups.find((group) => group.total_bytes === 60)?.representative).toEqual({
+    file_id: imageFirst,
+    kind: 'image',
+  });
+  expect(Object.keys(mixed).sort()).toEqual([
+    'id',
+    'kind',
+    'member_count',
+    'reclaimable_bytes',
+    'representative',
+    'total_bytes',
+  ]);
+  db.prepare("UPDATE files SET status='quarantined' WHERE id=?").run(video);
+  const updated = (await get('/api/groups')).json<GroupsResponse>().items;
+  expect(updated.find((group) => group.id === mixed.id)?.representative).toEqual({
+    file_id: image,
+    kind: 'image',
+  });
+  expect((await get(`/api/groups/${mixed.id}`)).json()).not.toHaveProperty('representative');
+});
+
+it('uses one indexed representative query restricted to returned page ids, not detail loads', async () => {
+  for (let i = 0; i < 55; i++) {
+    put(`${i}-a.jpg`, 10, `${i}`);
+    put(`${i}-b.jpg`, 10, `${i}`);
+  }
+  await match();
+  const prepare = vi.spyOn(Database.prototype, 'prepare');
+  const first = (await get('/api/groups')).json<GroupsResponse>();
+  const second = (await get(`/api/groups?cursor=${first.next_cursor}`)).json<GroupsResponse>();
+  const queries = prepare.mock.calls.map(([sql]) => sql);
+  const lookups = queries.filter((sql) => sql.startsWith('SELECT g.id AS group_id'));
+  expect(lookups).toHaveLength(2);
+  expect(queries.some((sql) => sql.includes('JOIN scan_dirs'))).toBe(false);
+  expect(first.items).toHaveLength(50);
+  expect(second.items).toHaveLength(5);
+  prepare.mockRestore();
+  for (const [index, page] of [first, second].entries()) {
+    const sql = lookups[index]!;
+    expect(sql.match(/\?/g)).toHaveLength(page.items.length);
+    expect(page.items.every((group) => group.representative?.kind === 'image')).toBe(true);
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...page.items.map((g) => g.id)) as {
+      detail: string;
+    }[];
+    expect(plan.some(({ detail }) => detail.startsWith('SEARCH g USING INTEGER PRIMARY KEY'))).toBe(
+      true
+    );
+    expect(
+      plan.some(
+        ({ detail }) =>
+          detail.startsWith('SEARCH m USING COVERING INDEX') && detail.includes('group_id=?')
+      )
+    ).toBe(true);
+    expect(
+      plan.some(({ detail }) => detail.includes('TEMP B-TREE') || detail.startsWith('SCAN '))
+    ).toBe(false);
+  }
+});
+
 it('rejects filter-mismatched cursors and reports a new generation on stale cursors', async () => {
   for (let i = 0; i < 3; i++) {
     put(`${i}-a.jpg`, 10, `${i}`);
@@ -285,13 +365,17 @@ it.each([1, 2, 3])('recomputes a spanning group with %i surviving members', asyn
     expect(await pages()).toEqual([
       {
         ...group,
+        representative: { file_id: ids[0], kind: 'image' },
         member_count: survivors,
         total_bytes: survivors * 10,
         reclaimable_bytes: (survivors - 1) * 10,
       },
     ]);
     expect(detail.json<GroupResponse>().members.items.map((member) => member.file_id)).toEqual(ids);
-    expect(detail.json<GroupResponse>()).toMatchObject((await pages())[0]!);
+    const { representative, ...summary } = (await get('/api/groups')).json<GroupsResponse>()
+      .items[0]!;
+    expect(representative).toEqual({ file_id: ids[0], kind: 'image' });
+    expect(detail.json<GroupResponse>()).toMatchObject(summary);
   }
 });
 
@@ -312,7 +396,8 @@ it('prunes non-done survivors and subtracts the largest surviving size from tota
   db.prepare('UPDATE files SET size=25 WHERE id=?').run(large);
   expect((await removeDir()).statusCode).toBe(204);
   expect((await get(`/api/groups/${group.id}`)).json<GroupResponse>()).toMatchObject({
-    ...group,
+    id: group.id,
+    kind: group.kind,
     member_count: 2,
     total_bytes: 35,
     reclaimable_bytes: 10,
