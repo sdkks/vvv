@@ -26,8 +26,8 @@ make ci        # typecheck + lint + build + test + secret scan
 
 Set `VVV_PASSWORD` in your shell, then run `pnpm dev`. Open the Vite URL
 (normally http://localhost:5173); its `/api` proxy connects to port 8080.
-The browser currently has login and an authenticated empty Home screen;
-scanning is available through the API below. The built SPA is served by the API server.
+The authenticated browser UI supports scanning and duplicate matching. The built SPA
+is served by the API server.
 
 - `packages/server`: Fastify API, signed-cookie auth, SQLite bootstrap.
 - `packages/web`: React SPA, Vite development server and production build.
@@ -145,11 +145,20 @@ Paths refer to directories visible to the server (container paths when container
 | `POST /api/scan-dirs`                         | Registers `{ "path": string, "follow_symlinks"?: boolean, "cross_filesystems"?: boolean }`. Options default to false; paths are normalized to absolute paths. Returns 201, 400 for invalid directories/input, or 409 for an already-registered path. |
 | `PATCH /api/scan-dirs/:id`                    | Updates either or both boolean traversal options.                                                                                                                                                                                                    |
 | `DELETE /api/scan-dirs/:id`                   | Unregisters the directory and cascades its indexed file rows. Returns 204, or 404 if absent. **Never deletes or moves files on disk**, including `.vvv-trash/` contents.                                                                             |
-| `POST /api/scans`                             | Starts a scan and returns 202 `{ "id": number }`, or 409 while one is running.                                                                                                                                                                       |
+| `POST /api/scans`                             | Starts a scan and returns 202 `{ "id": number }` or 409 while one is running. Optional JSON booleans `images`, `videos`, and `audio` select standalone media kinds; each defaults to `true`.                                                         |
 | `GET /api/scans/current`                      | Returns the latest durable scan counters/status (or null), with `current_file` when processing.                                                                                                                                                      |
 | `POST /api/scans/:id/cancel`                  | Requests cooperative cancellation; the next scan skips unchanged completed files.                                                                                                                                                                    |
 | `GET /api/scans/:id/events`                   | Streams `event: progress` with a JSON scan snapshot in `data:`.                                                                                                                                                                                      |
 | `GET /api/scans/:id/errors?cursor=&limit=100` | Returns `{ "items": [{ "file_id", "path", "error" }], "next_cursor": string\|null }`. Pass `next_cursor` unchanged to fetch the next page; null ends pagination.                                                                                     |
+
+For `POST /api/scans`, unknown keys or non-boolean options return 400
+`{ "error": "invalid_scan_options" }`; a running scan returns 409
+`{ "error": "scan_running" }`.
+
+Scan kind selection applies to that scan only; it is not saved as a setting. Unchecked
+kinds remain in the catalog and are not marked missing. Audio selection controls
+standalone audio files; audio tracks in selected videos can still be matched when Audio
+matching is enabled in Settings. Newly generated match groups use the selected kinds.
 
 Error pages are ordered by file ID (default 100 rows, capped at 500) and include only
 files last seen in that scan that currently have error status. This is not an immutable
@@ -165,6 +174,21 @@ the server sends `X-Accel-Buffering: no`, but cannot guarantee proxy behavior.
 Unregistering a directory discards its catalog metadata; restore or purge any trash you
 want managed before unregistering it when trash management is available. Unregistering
 is not a filesystem cleanup operation.
+
+## Matching API
+
+All matching routes require the authenticated session cookie. `POST /api/matches/run`
+starts matching and returns 202 `{ "match_run": number }`, or 409
+`{ "error": "match_running" }` if a run is active. When a scan completes successfully,
+its automatic match run uses that scan's selected kinds; a manually started run uses
+the latest successfully completed scan's selection, or all kinds if no scan has
+completed.
+
+`POST /api/matches/clear` returns 204 when matching is idle. It removes generated
+duplicate groups and their memberships only, preserving directories, files, hashes,
+fingerprints, and match-run metadata. If matching is active or queued, it returns
+409 `{ "error": "match_running" }` without clearing results; retry after matching
+finishes.
 
 Commits must follow [Conventional Commits](https://www.conventionalcommits.org/)
 (enforced by commitlint via a `commit-msg` hook). The `pre-commit` hook runs
