@@ -1,16 +1,18 @@
 # VVV (Veni Vidi Video)
 
-VVV is a content aware video matching tool to find and nuke your duplicate videos to save disk space.
+VVV is a self-hosted media matching tool for finding exact duplicates, similar images and videos, and partial audio matches. Review groups and move selected files to Trash when you’re ready.
 
 Containers are built and run with **podman** (not docker) — see `docs/deployment.md` and `AGENTS.md`.
 
 # Screenshots
 
 ### See matching groups:
-<img width="1152" height="729" alt="image" src="https://github.com/user-attachments/assets/8c9773dd-3b6f-46a1-8006-3d7e57e88e35" />
+
+<img width="1152" height="729" alt="Duplicate groups list showing video and partial-audio matches, member counts, and reclaimable space." src="https://github.com/user-attachments/assets/8c9773dd-3b6f-46a1-8006-3d7e57e88e35" />
 
 ### Individual selection or automatic marking of what to trash:
-<img width="901" height="789" alt="image" src="https://github.com/user-attachments/assets/9fa6239b-8029-426b-8cce-19ae076265f5" />
+
+<img width="901" height="789" alt="Video group review with a reference file, keeper-selection options, and candidate duplicates." src="https://github.com/user-attachments/assets/9fa6239b-8029-426b-8cce-19ae076265f5" />
 
 # Development
 
