@@ -19,6 +19,9 @@ import {
   autoMarkCriteria,
   groupsKey,
   isVideo,
+  keeperByCriteria,
+  keeperCriteria,
+  keeperEligible,
   nextGroup,
   nextMember,
   previousCursor,
@@ -351,6 +354,94 @@ describe('auto-mark', () => {
   });
   it('marks nothing in a single-member group', () => {
     expect(autoMark(members({ file_id: 4 }), 'largest_size', new Set()).size).toBe(0);
+  });
+});
+
+describe('keeper selection', () => {
+  const members = [
+    { file_id: 9, size: 500, width: 200, height: 100, duration_ms: 8000 },
+    { file_id: 4, size: 100, width: 100, height: 300, duration_ms: 2000 },
+    { file_id: 7, size: 200, width: 300, height: 100, duration_ms: 3000 },
+    { file_id: 6, size: 300, width: 150, height: 200, duration_ms: 3000 },
+  ];
+  it.each([
+    [['resolution'], 4],
+    [['duration'], 9],
+    [['size'], 9],
+    [['resolution', 'duration'], 6],
+    [['resolution', 'size'], 6],
+    [['duration', 'size'], 9],
+    [['resolution', 'duration', 'size'], 6],
+    [['size', 'resolution'], 9],
+  ] as const)('selects lexicographically by %j, not a blended score', (criteria, id) => {
+    expect(keeperByCriteria(members, criteria)?.file_id).toBe(id);
+  });
+  it('offers a fixed resolution, duration, size UI priority', () => {
+    expect(keeperCriteria.map(({ criterion }) => criterion)).toEqual([
+      'resolution',
+      'duration',
+      'size',
+    ]);
+  });
+  it('breaks complete ties by lowest id, without mutating or depending on input order', () => {
+    const tied = members.map((member) => ({ ...members[0]!, file_id: member.file_id }));
+    const copy = structuredClone(tied);
+    expect(keeperByCriteria(tied, ['resolution', 'duration', 'size'])?.file_id).toBe(4);
+    expect(tied).toEqual(copy);
+    expect(keeperByCriteria([...tied].reverse(), ['size'])?.file_id).toBe(4);
+  });
+  it.each([
+    ['resolution', 'highest_resolution'],
+    ['duration', 'longest_duration'],
+    ['size', 'largest_size'],
+  ] as const)('matches the existing %s menu rule for a single criterion', (criterion, old) => {
+    const keeper = keeperByCriteria(members, [criterion]);
+    expect(
+      new Set(members.filter((member) => member !== keeper).map((member) => member.file_id))
+    ).toEqual(autoMark(members, old, new Set(members.map((member) => member.file_id))));
+  });
+  it('requires every selected attribute but still includes missing-attribute members in discards', () => {
+    const mixed = [
+      { ...members[0]!, width: null },
+      { ...members[1]!, duration_ms: null },
+      members[2]!,
+    ];
+    const keeper = keeperByCriteria(mixed, ['resolution', 'duration']);
+    expect(keeper?.file_id).toBe(7);
+    expect(mixed.filter((member) => member !== keeper).map((member) => member.file_id)).toEqual([
+      9, 4,
+    ]);
+    expect(keeperByCriteria(mixed, ['size'])?.file_id).toBe(9);
+  });
+  it('returns no keeper for no criteria, no members, or no member with all attributes', () => {
+    expect(keeperByCriteria(members, [])).toBeUndefined();
+    expect(keeperByCriteria([], ['size'])).toBeUndefined();
+    expect(
+      keeperByCriteria(
+        [
+          { ...members[0]!, width: null },
+          { ...members[1]!, duration_ms: null },
+        ],
+        ['resolution', 'duration']
+      )
+    ).toBeUndefined();
+  });
+  it('disables a criterion if even one member lacks it, including either resolution dimension', () => {
+    expect(keeperEligible(members, 'resolution')).toBe(true);
+    expect(keeperEligible(members, 'duration')).toBe(true);
+    for (const missing of [{ width: null }, { height: null }]) {
+      expect(keeperEligible([members[0]!, { ...members[1]!, ...missing }], 'resolution')).toBe(
+        false
+      );
+    }
+    const mixed = [members[0]!, { ...members[1]!, duration_ms: null }];
+    expect(keeperEligible(mixed, 'duration')).toBe(false);
+    expect(keeperEligible(mixed, 'size')).toBe(true);
+    expect(keeperEligible([], 'size')).toBe(false);
+    expect(keeperEligible([{ ...members[0]!, duration_ms: 0 }], 'duration')).toBe(true);
+  });
+  it('keeps a lone eligible member', () => {
+    expect(keeperByCriteria([members[0]!], ['size'])).toBe(members[0]);
   });
 });
 

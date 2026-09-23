@@ -17,11 +17,45 @@ import {
   autoMarkCriteria,
   formatBytes,
   formatDuration,
+  keeperByCriteria,
+  keeperCriteria,
+  keeperEligible,
   nextMember,
   reviewShortcut,
   toggleMarked,
   type AutoMarkCriterion,
+  type KeeperCriterion,
 } from './group-review';
+
+type KeeperReview = { keeper: GroupMember; criteria: KeeperCriterion[]; members: GroupMember[] };
+export function KeeperAnnouncement({ review }: { review: KeeperReview | null }) {
+  const filename = review?.keeper.path.split('/').at(-1);
+  const collision =
+    review &&
+    review.members.filter((member) => member.path.split('/').at(-1) === filename).length > 1;
+  return (
+    <div role="status" aria-live="polite">
+      {review && (
+        <>
+          <p>
+            Keeping {filename} (
+            {keeperCriteria
+              .filter(({ criterion }) => review.criteria.includes(criterion))
+              .map(({ summary }) => summary)
+              .join(', ')}
+            ); marked {review.members.length - 1} of {review.members.length} for Trash. Review
+            below, then confirm quarantine.
+          </p>
+          {collision && (
+            <p className="file-path" tabIndex={0}>
+              Kept file: {review.keeper.path}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 function Thumbnail({ member }: { member: GroupMember }) {
   const [src, setSrc] = useState('');
@@ -82,10 +116,14 @@ export function GroupDetail({
     retry: false,
   });
   const [marked, setMarked] = useState(new Set<number>());
+  const [criteria, setCriteria] = useState<KeeperCriterion[]>([]);
+  const [keeperReview, setKeeperReview] = useState<KeeperReview | null>(null);
+  const keeperData = useRef(query.data);
   const [active, setActive] = useState(0);
   const apply = useMutation({
     mutationFn: () => quarantineFiles([...marked]),
     onSuccess: async (result) => {
+      setKeeperReview(null);
       setMarked(new Set(result.failed.map((item) => item.file_id)));
       await onApplied(result);
       if (result.failed.length) await query.refetch();
@@ -106,6 +144,27 @@ export function GroupDetail({
       !apply.data?.moved.some((item) => item.file_id === member.file_id)
   );
   const loaded = Boolean(group);
+  const selectedCriteria = keeperCriteria
+    .filter(({ criterion }) => criteria.includes(criterion) && keeperEligible(members, criterion))
+    .map(({ criterion }) => criterion);
+  const allMembersLoaded = loaded && !query.hasNextPage && members.length === group?.member_count;
+  const keeperDisabled =
+    !allMembersLoaded ||
+    !selectedCriteria.length ||
+    query.isFetching ||
+    query.isError ||
+    apply.isPending;
+  useEffect(() => {
+    setCriteria((current) => current.filter((criterion) => keeperEligible(members, criterion)));
+    if (keeperData.current !== query.data) {
+      // Any membership change invalidates keeper-derived markings: they may
+      // reference members that are no longer visible for review.
+      setKeeperReview(null);
+      setMarked(new Set());
+      setMemberNotice('Members changed. Review the group and choose a keeper again.');
+    }
+    keeperData.current = query.data;
+  }, [query.data]);
   useEffect(() => {
     // Recovery from generation-stale or vanished-group refetches must run even when
     // the apply response carried per-item failures; otherwise the UI stays on a
@@ -164,7 +223,25 @@ export function GroupDetail({
     (list.current?.children[next] as HTMLElement | undefined)?.focus();
   }
   function toggle(id = members[active]?.file_id) {
-    if (id !== undefined && !apply.isPending) setMarked((value) => toggleMarked(value, id));
+    if (id !== undefined && !apply.isPending) {
+      setKeeperReview(null);
+      setMarked((value) => toggleMarked(value, id));
+    }
+  }
+  function chooseKeeper() {
+    if (keeperDisabled) return;
+    const keeper = keeperByCriteria(members, selectedCriteria);
+    if (!keeper) return;
+    setMarked(
+      new Set(
+        members
+          .filter((member) => member.file_id !== keeper.file_id)
+          .map((member) => member.file_id)
+      )
+    );
+    setKeeperReview({ keeper, criteria: selectedCriteria, members });
+    keeperData.current = query.data;
+    setMemberNotice('');
   }
   function confirmApply(trigger: HTMLElement) {
     if (!marked.size || apply.isPending) return;
@@ -173,6 +250,7 @@ export function GroupDetail({
     else trigger.focus();
   }
   function applyAutoMark(criterion: AutoMarkCriterion) {
+    setKeeperReview(null);
     const next = autoMark(members, criterion, marked);
     setMarked(next);
     setAutoMarkOpen(false);
@@ -243,6 +321,92 @@ export function GroupDetail({
       <p role="status" aria-live="polite">
         {memberNotice}
       </p>
+      <div className="toolbar">
+        <div className="auto-mark" onKeyDown={autoMarkKeys}>
+          <button
+            ref={autoMarkTrigger}
+            aria-expanded={autoMarkOpen}
+            aria-controls="auto-mark-menu"
+            disabled={apply.isPending || !members.length}
+            onClick={() => setAutoMarkOpen((open) => !open)}
+          >
+            Auto-mark
+          </button>
+          <div
+            id="auto-mark-menu"
+            className="auto-mark-menu"
+            role="group"
+            aria-label="Auto-mark criteria"
+            hidden={!autoMarkOpen}
+            ref={autoMarkMenu}
+          >
+            {autoMarkCriteria.map(({ criterion, label }) => (
+              <button
+                key={criterion}
+                disabled={apply.isPending || !autoMarkAvailable(members, criterion)}
+                onClick={() => applyAutoMark(criterion)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <fieldset
+        className="keeper-selection"
+        disabled={apply.isPending}
+        aria-describedby="keeper-help"
+      >
+        <legend>Choose one file to keep</legend>
+        <p id="keeper-help">
+          Selections compare in this order: resolution, duration, file size. A later choice breaks
+          ties; one file is kept. This replaces current markings but moves nothing yet. Clear
+          markings resets.
+        </p>
+        {keeperCriteria.map(({ criterion, label, unavailable }) => {
+          const eligible = keeperEligible(members, criterion);
+          return (
+            <div key={criterion}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={selectedCriteria.includes(criterion)}
+                  disabled={!eligible}
+                  aria-describedby={!eligible ? `keeper-${criterion}-help` : undefined}
+                  onChange={(event) =>
+                    setCriteria(
+                      event.target.checked
+                        ? [...selectedCriteria, criterion]
+                        : selectedCriteria.filter((item) => item !== criterion)
+                    )
+                  }
+                />
+                <span>{label}</span>
+              </label>
+              {!eligible && (
+                <p className="metadata" id={`keeper-${criterion}-help`}>
+                  {unavailable} unavailable for some files; choose another rule or review manually.
+                </p>
+              )}
+            </div>
+          );
+        })}
+        {!allMembersLoaded && (
+          <p role="status">
+            Load all members to choose a keeper. {members.length} of {group?.member_count ?? '…'}{' '}
+            loaded.{query.isFetching && ' Loading members…'}
+          </p>
+        )}
+        {query.hasNextPage && (
+          <button disabled={query.isFetching} onClick={() => loadMore()}>
+            Load more members
+          </button>
+        )}
+        <button disabled={keeperDisabled} onClick={chooseKeeper}>
+          Mark other files for Trash
+        </button>
+      </fieldset>
+      <KeeperAnnouncement review={keeperReview} />
       <ul className="members" ref={list}>
         {members.map((member, index) => (
           <li
@@ -308,38 +472,15 @@ export function GroupDetail({
         >
           {apply.isPending ? 'Quarantining…' : `Quarantine ${marked.size} marked files`}
         </button>
-        <button onClick={() => setMarked(new Set())} disabled={!marked.size || apply.isPending}>
+        <button
+          onClick={() => {
+            setMarked(new Set());
+            setKeeperReview(null);
+          }}
+          disabled={!marked.size || apply.isPending}
+        >
           Clear markings
         </button>
-        <div className="auto-mark" onKeyDown={autoMarkKeys}>
-          <button
-            ref={autoMarkTrigger}
-            aria-expanded={autoMarkOpen}
-            aria-controls="auto-mark-menu"
-            disabled={apply.isPending || !members.length}
-            onClick={() => setAutoMarkOpen((open) => !open)}
-          >
-            Auto-mark
-          </button>
-          <div
-            id="auto-mark-menu"
-            className="auto-mark-menu"
-            role="group"
-            aria-label="Auto-mark criteria"
-            hidden={!autoMarkOpen}
-            ref={autoMarkMenu}
-          >
-            {autoMarkCriteria.map(({ criterion, label }) => (
-              <button
-                key={criterion}
-                disabled={apply.isPending || !autoMarkAvailable(members, criterion)}
-                onClick={() => applyAutoMark(criterion)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
         <small>Quarantined files can be restored from Trash until permanently purged.</small>
         {apply.isError && <p role="alert">{apply.error.message}</p>}
       </div>

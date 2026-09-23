@@ -2,9 +2,23 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { GroupResponse } from '@vvv/shared';
-import { expect, it } from 'vitest';
-import { GroupDetail } from './GroupDetail';
+import type { GroupMember, GroupResponse } from '@vvv/shared';
+import { afterEach, expect, it, vi } from 'vitest';
+import { GroupDetail, KeeperAnnouncement } from './GroupDetail';
+import type { KeeperCriterion } from './group-review';
+
+let selectedCriteria: KeeperCriterion[] = [];
+vi.mock('react', async (importOriginal) => {
+  const original = await importOriginal<typeof import('react')>();
+  return {
+    ...original,
+    useState: (initial: unknown) =>
+      original.useState(Array.isArray(initial) && !initial.length ? selectedCriteria : initial),
+  };
+});
+afterEach(() => {
+  selectedCriteria = [];
+});
 import { PageHeading } from './PageHeading';
 
 function renderMembers(
@@ -14,13 +28,16 @@ function renderMembers(
     width?: number | null;
     height?: number | null;
     duration_ms?: number | null;
-  }[] = []
+  }[] = [],
+  pagination: { next_cursor?: string | null; member_count?: number } = {}
 ) {
-  const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { gcTime: Infinity, staleTime: Infinity } },
+  });
   const group: GroupResponse = {
     id: 1,
     kind: similarities[0] === null ? 'exact' : 'image',
-    member_count: similarities.length,
+    member_count: pagination.member_count ?? similarities.length,
     total_bytes: 300,
     reclaimable_bytes: 200,
     members: {
@@ -35,7 +52,7 @@ function renderMembers(
         similarity,
         ...attrs[index],
       })),
-      next_cursor: null,
+      next_cursor: pagination.next_cursor ?? null,
     },
   };
   client.setQueryData(['groups', 'detail', '1'], { pages: [group], pageParams: [''] });
@@ -73,6 +90,78 @@ it('labels exact members without fabricating perceptual distances', () => {
   expect(html).toContain('>Reference<');
   expect(html.match(/Exact copy/g)).toHaveLength(2);
   expect(html).not.toContain('Distance from reference:');
+});
+it('renders the keeper fieldset before review and quarantine, with explained metadata disabling', () => {
+  const html = renderMembers([0, 1], [{}, { width: null }]);
+  expect(html).toContain('<legend>Choose one file to keep</legend>');
+  expect(html.match(/type="checkbox"/g)).toHaveLength(3);
+  expect(html).toContain('Highest resolution (quality proxy)');
+  expect(html).toContain('Longest duration');
+  expect(html).toContain('Largest file size');
+  expect(html).toContain('aria-describedby="keeper-resolution-help"');
+  expect(html).toContain(
+    'Resolution unavailable for some files; choose another rule or review manually.'
+  );
+  expect(html).toContain(
+    'Duration unavailable for some files; choose another rule or review manually.'
+  );
+  expect(html).toContain(
+    'This replaces current markings but moves nothing yet. Clear markings resets.'
+  );
+  expect(html).toContain('<button disabled="">Mark other files for Trash</button>');
+  expect(html.indexOf('auto-mark-menu')).toBeLessThan(html.indexOf('<legend>Choose'));
+  expect(html.indexOf('<legend>Choose')).toBeLessThan(html.indexOf('<ul class="members"'));
+  expect(html.indexOf('<ul class="members"')).toBeLessThan(
+    html.indexOf('Quarantine 0 marked files')
+  );
+});
+it.each([
+  { next_cursor: 'page2', member_count: 3, enabled: false },
+  { next_cursor: null, member_count: 3, enabled: false },
+  { next_cursor: null, member_count: 2, enabled: true },
+])('guards keeper selection until all members are loaded: %j', ({ enabled, ...pagination }) => {
+  selectedCriteria = ['size'];
+  const html = renderMembers([0, 1], [], pagination);
+  expect(html.includes('<button disabled="">Mark other files for Trash</button>')).toBe(!enabled);
+  expect(html.includes('Load all members to choose a keeper.')).toBe(!enabled);
+  if (!enabled) expect(html).toContain('2 of 3 loaded.');
+});
+it('does not use an unavailable selected criterion after more members arrive', () => {
+  selectedCriteria = ['duration'];
+  const html = renderMembers([0, 1], [{ duration_ms: 1000 }, { duration_ms: null }]);
+  expect(html).not.toContain('checked=""');
+  expect(html).toContain('<button disabled="">Mark other files for Trash</button>');
+});
+it('renders the polite keeper review announcement and a focusable full path for colliding filenames', () => {
+  const member: GroupMember = {
+    file_id: 2,
+    path: '/media/original/clip.mp4',
+    size: 100,
+    width: 100,
+    height: 100,
+    duration_ms: 1000,
+    quarantined: false,
+    similarity: 0,
+  };
+  const html = renderToStaticMarkup(
+    createElement(KeeperAnnouncement, {
+      review: {
+        keeper: member,
+        criteria: ['resolution', 'duration'],
+        members: [member, { ...member, file_id: 1, path: '/media/copy/clip.mp4' }],
+      },
+    })
+  );
+  expect(html).toContain('role="status" aria-live="polite"');
+  expect(html).toContain(
+    'Keeping clip.mp4 (highest resolution, longest duration); marked 1 of 2 for Trash. Review below, then confirm quarantine.'
+  );
+  expect(html).toContain(
+    '<p class="file-path" tabindex="0">Kept file: /media/original/clip.mp4</p>'
+  );
+  expect(renderToStaticMarkup(createElement(KeeperAnnouncement, { review: null }))).toBe(
+    '<div role="status" aria-live="polite"></div>'
+  );
 });
 it('renders a semantic page heading that is programmatically focusable, not a tab stop', () => {
   const html = renderToStaticMarkup(

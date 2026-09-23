@@ -110,6 +110,31 @@ nav [aria-current='page'] {
   padding: 0.5rem 0.65rem;
   text-align: left;
 }
+.keeper-selection {
+  min-width: 0;
+  border: 1px solid #c5ced9;
+  border-radius: 0.35rem;
+}
+.keeper-selection legend,
+.keeper-selection button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.keeper-selection label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+.keeper-selection input {
+  flex-shrink: 0;
+  width: 1.5rem;
+}
+.keeper-selection button {
+  display: block;
+  margin-block: 0.75rem;
+}
 a {
   color: #194b88;
 }

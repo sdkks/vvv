@@ -129,6 +129,64 @@ export function autoMarkAvailable(members: AutoMarkMember[], criterion: AutoMark
   return members.some((member) => criterionValue(member, criterion) !== null);
 }
 
+export type KeeperCriterion = 'resolution' | 'duration' | 'size';
+export const keeperCriteria: readonly {
+  criterion: KeeperCriterion;
+  label: string;
+  summary: string;
+  unavailable: string;
+}[] = [
+  {
+    criterion: 'resolution',
+    label: 'Highest resolution (quality proxy)',
+    summary: 'highest resolution',
+    unavailable: 'Resolution',
+  },
+  {
+    criterion: 'duration',
+    label: 'Longest duration',
+    summary: 'longest duration',
+    unavailable: 'Duration',
+  },
+  {
+    criterion: 'size',
+    label: 'Largest file size',
+    summary: 'largest file size',
+    unavailable: 'File size',
+  },
+];
+function keeperValue(member: AutoMarkMember, criterion: KeeperCriterion) {
+  const rule = {
+    resolution: 'highest_resolution',
+    duration: 'longest_duration',
+    size: 'largest_size',
+  } as const;
+  return criterionValue(member, rule[criterion]);
+}
+/** Compare selected attributes lexicographically, then lowest file_id. Missing
+ * any selected attribute makes a member ineligible, not exempt from marking.
+ * Callers replace markings with every id except the keeper; Clear markings resets.
+ * No criteria or no eligible members yields no keeper and must not change markings. */
+export function keeperByCriteria<T extends AutoMarkMember>(
+  members: T[],
+  criteria: readonly KeeperCriterion[]
+): T | undefined {
+  if (!criteria.length) return undefined;
+  return members
+    .filter((member) => criteria.every((criterion) => keeperValue(member, criterion) !== null))
+    .sort((a, b) => {
+      for (const criterion of criteria) {
+        const difference = (keeperValue(b, criterion) ?? 0) - (keeperValue(a, criterion) ?? 0);
+        if (difference) return difference;
+      }
+      return a.file_id - b.file_id;
+    })[0];
+}
+/** The checkbox is available only when every loaded member has the attribute. */
+export function keeperEligible(members: AutoMarkMember[], criterion: KeeperCriterion) {
+  return members.length > 0 && members.every((member) => keeperValue(member, criterion) !== null);
+}
+
 export type ApplyRecovery = 'advance' | 'stale' | 'none';
 /** Decides recovery after a quarantined apply, before any failed-item rendering:
  * a dissolved group refetch (404) advances, a stale generation (409) restarts
