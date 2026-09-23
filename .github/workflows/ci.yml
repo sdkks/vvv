@@ -1,0 +1,119 @@
+name: CI and publish
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/sdkks/vvv
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    name: Test gate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+          package-manager-cache: false
+      - name: Install test and secret-scan tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools gitleaks
+      - name: Install pinned dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Run all CI checks
+        run: make ci
+
+  build:
+    name: Build and push (${{ matrix.arch }})
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build native image
+        run: |
+          podman build --format docker --platform "linux/${ARCH}" \
+            --label org.opencontainers.image.source=https://github.com/sdkks/vvv \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${IMAGE}:${GITHUB_SHA}-${ARCH}" .
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+      - name: Push architecture image
+        run: podman push "${IMAGE}:${GITHUB_SHA}-${ARCH}"
+      - name: Log out of GHCR
+        if: always()
+        run: podman logout ghcr.io
+
+  publish:
+    name: Publish multi-architecture latest
+    needs: [ci, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+      - name: Assemble and verify manifest
+        run: |
+          podman manifest create vvv-latest
+          for arch in amd64 arm64; do
+            podman manifest add vvv-latest "docker://${IMAGE}:${GITHUB_SHA}-${arch}"
+          done
+          podman manifest inspect vvv-latest | jq -e '
+            (.manifests | length == 2) and
+            ([.manifests[].platform | "\(.os)/\(.architecture)"] | sort ==
+              ["linux/amd64", "linux/arm64"])
+          '
+      - name: Publish latest manifest
+        run: podman manifest push --all vvv-latest "docker://${IMAGE}:latest"
+      - name: Log out of GHCR
+        if: always()
+        run: podman logout ghcr.io
