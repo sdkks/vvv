@@ -33,6 +33,18 @@ const waitScan = async () =>
       }),
     { timeout: 60000, interval: 20 }
   );
+const waitMatch = async () =>
+  vi.waitFor(
+    () => {
+      expect(db.prepare('SELECT status FROM match_runs ORDER BY id DESC LIMIT 1').get()).toEqual({
+        status: 'active',
+      });
+      expect(
+        db.prepare("SELECT count(*) AS n FROM match_runs WHERE status='building'").get()
+      ).toEqual({ n: 0 });
+    },
+    { timeout: 60000, interval: 20 }
+  );
 beforeAll(async () => {
   fixtures = await mkdtemp(join(tmpdir(), 'vvv-audio-fixtures-'));
   await ffmpeg(
@@ -125,6 +137,7 @@ it.skipIf(!hasFpcalc)(
     db.prepare('INSERT INTO scan_dirs(path) VALUES (?)').run(media);
     expect((await request('/api/scans', 'POST')).statusCode).toBe(202);
     await waitScan();
+    await waitMatch();
     expect((await app.inject({ method: 'POST', url: '/api/scans' })).statusCode).toBe(401);
     const rows = db
       .prepare(
@@ -187,6 +200,7 @@ it.skipIf(!hasFpcalc)(
     await copyFile(join(fixtures, 'tone.mp3'), join(media, 'muted.mp3'));
     await request('/api/scans', 'POST');
     await waitScan();
+    await waitMatch();
     expect(
       db.prepare('SELECT status,audio_fingerprinted FROM files WHERE rel_path=?').get('muted.mp3')
     ).toEqual({ status: 'done', audio_fingerprinted: 0 });
